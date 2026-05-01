@@ -73,6 +73,15 @@
   .log-text .speaker { color: var(--purple); font-weight: 600; }
   .log-text .asr-text { color: var(--green); }
 
+  /* ── Latest result hero ── */
+  .result-hero { background: var(--bg3); border-radius: 12px; border: 1px solid var(--border); padding: 14px; margin-top: 4px; }
+  .result-hero .r-speaker { font-size: 16px; font-weight: 700; color: var(--purple); display: flex; align-items: center; gap: 6px; }
+  .result-hero .r-speaker .badge { font-size: 10px; background: rgba(188,140,255,.2); border-radius: 10px; padding: 2px 7px; font-weight: 500; }
+  .result-hero .r-text { margin-top: 8px; font-size: 18px; font-weight: 600; color: var(--green); line-height: 1.4; word-break: break-all; }
+  .result-hero .r-meta { margin-top: 6px; font-size: 11px; color: var(--muted); }
+  .result-hero.flash { animation: flash-anim .5s ease; }
+  @keyframes flash-anim { 0%{background:rgba(63,185,80,.25)} 100%{background:var(--bg3)} }
+
   /* ── Register panel ── */
   .register-panel { border-top: 1px solid var(--border); background: var(--bg2); }
   .register-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
@@ -100,6 +109,16 @@
   .reg-result { grid-column: span 2; padding: 8px 12px; border-radius: 6px; font-size: 12px; display: none; }
   .reg-result.ok { background: rgba(63,185,80,.15); color: var(--green); display: block; }
   .reg-result.err { background: rgba(248,81,73,.15); color: var(--red); display: block; }
+
+  /* ── LLM panel ── */
+  .llm-panel { border-top: 1px solid var(--border); background: var(--bg2); }
+  .llm-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .llm-header h2 { font-size: 13px; font-weight: 600; }
+  .llm-body { padding: 16px; font-size: 12px; line-height: 1.7; }
+  .llm-body pre { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-family: 'Cascadia Code','Fira Code',monospace; font-size: 11px; white-space: pre; }
+  .llm-body h3 { font-size: 12px; color: var(--blue); margin: 12px 0 6px; }
+  .llm-body p { color: var(--muted); margin-bottom: 8px; }
+  .llm-body .tip { background: rgba(88,166,255,.08); border-left: 3px solid var(--blue); padding: 8px 10px; border-radius: 0 6px 6px 0; margin: 8px 0; }
 
   /* ── Speaker count badge ── */
   .spk-count { background: var(--bg3); border-radius: 12px; padding: 2px 8px; font-size: 11px; color: var(--muted); }
@@ -166,8 +185,12 @@
     </section>
 
     <section>
-      <h2>最近识别 <span class="spk-count" id="spkBadge">—</span></h2>
-      <div id="lastResult" style="font-size:13px;line-height:1.6;color:var(--muted)">—</div>
+      <h2>最近识别结果</h2>
+      <div class="result-hero" id="lastResult">
+        <div class="r-speaker" id="lastSpeaker" style="color:var(--muted)">👤 等待识别...</div>
+        <div class="r-text" id="lastText" style="color:var(--muted);font-size:14px">对着麦克风说话</div>
+        <div class="r-meta" id="lastMeta"></div>
+      </div>
     </section>
   </aside>
 
@@ -199,8 +222,11 @@
         <label>音频来源</label>
         <button class="record-btn" id="recordBtn" onclick="toggleRecord()">
           <span id="recordIcon">🎙️</span>
-          <span id="recordLabel">点击开始录音（5秒）</span>
+          <span id="recordLabel">点击开始服务器录音（5秒）</span>
         </button>
+        <div id="recordHint" style="font-size:10px;color:var(--muted);margin-top:2px">
+          通过服务器麦克风录音，无需 HTTPS
+        </div>
       </div>
 
       <div class="form-group" style="grid-column:span 2">
@@ -216,6 +242,63 @@
       <div class="reg-result" id="regResult"></div>
     </div>
   </div>
+
+  <!-- ── LLM Integration Guide ── -->
+  <div class="llm-panel">
+    <div class="llm-header" onclick="toggleLLM()">
+      <h2>🤖 如何接入 LLM（大语言模型）</h2>
+      <span id="llmArrow">▼</span>
+    </div>
+    <div class="llm-body" id="llmBody" style="display:none">
+      <p>VAD 服务处理完成后，通过 WebSocket 返回 JSON 结果：</p>
+      <pre>{"text": "今天天气怎么样", "speaker": {"id": "徐琪", "score": 0.87}}</pre>
+
+      <h3>📌 接入步骤</h3>
+      <div class="tip">连接 ws://vad-service:8765，接收识别结果，拼装 Prompt 调用 LLM API。</div>
+
+      <h3>Python 示例（OpenAI 兼容接口）</h3>
+      <pre>import asyncio, json, websockets
+from openai import OpenAI
+
+client = OpenAI(api_key="sk-...",
+                base_url="https://api.openai.com/v1")
+# 国产模型示例：
+# base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"  # 阿里百炼
+# base_url="https://api.deepseek.com/v1"                        # DeepSeek
+
+async def main():
+    async with websockets.connect("ws://localhost:8765") as ws:
+        async for msg in ws:
+            result  = json.loads(msg)
+            text    = result.get("text", "")
+            speaker = (result.get("speaker") or {})
+            name    = speaker.get("id", "用户")
+            if not text:
+                continue
+            resp = client.chat.completions.create(
+                model="gpt-4o",  # 或 qwen-turbo / deepseek-chat
+                messages=[
+                    {"role": "system",
+                     "content": "你是智能语音助手，根据说话人身份个性化回复。"},
+                    {"role": "user",
+                     "content": f"用户[{name}]说：{text}"},
+                ]
+            )
+            print("LLM:", resp.choices[0].message.content)
+
+asyncio.run(main())</pre>
+
+      <h3>🔑 关键字段</h3>
+      <pre>result["text"]              # 识别文本
+result["speaker"]["id"]     # 说话人姓名（声纹匹配）
+result["speaker"]["score"]  # 置信度 0~1（&gt;0.5 可信）</pre>
+
+      <h3>📦 推荐国内模型</h3>
+      <pre>阿里百炼  dashscope.aliyuncs.com  qwen-turbo / qwen-max
+DeepSeek  api.deepseek.com         deepseek-chat
+本地      localhost:11434/v1       llama3 / qwen2.5 (Ollama)</pre>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -226,9 +309,6 @@ let ws = null, paused = false;
 let stats = { detected: 0, recognized: 0, identified: 0 };
 let recordedBlob = null, selectedFile = null;
 let isRecording = false;
-let mediaStream = null, audioCtx = null, processor = null;
-let recordChunks = [];
-let recordTimer = null;
 
 // ──────────────────────────────────────────────
 // WebSocket
@@ -304,10 +384,27 @@ function handleEvent(ev) {
     }
 
   } else if (t === 'result') {
-    // final combined result
-    const spk = ev.speaker ? `<span class="speaker">${esc(ev.speaker)}</span>` : '<span style="color:var(--muted)">未知</span>';
-    const txt = ev.text ? `<span class="asr-text">${esc(ev.text)}</span>` : '<span style="color:var(--muted)">（无文本）</span>';
-    document.getElementById('lastResult').innerHTML = `${spk}<br>${txt}`;
+    const spk = ev.speaker || '';
+    const txt = ev.text || '';
+    const hero = document.getElementById('lastResult');
+    // Speaker
+    const spkEl = document.getElementById('lastSpeaker');
+    if (spk) {
+      spkEl.innerHTML = `👤 <span style="color:var(--purple)">${esc(spk)}</span>`;
+    } else {
+      spkEl.innerHTML = `👤 <span style="color:var(--muted)">未识别说话人</span>`;
+    }
+    // Text
+    const txtEl = document.getElementById('lastText');
+    txtEl.textContent = txt || '（未识别文本）';
+    txtEl.style.color = txt ? 'var(--green)' : 'var(--muted)';
+    // Meta
+    const now = new Date().toTimeString().slice(0,8);
+    document.getElementById('lastMeta').textContent = `识别时间: ${now}`;
+    // Flash animation
+    hero.classList.remove('flash');
+    void hero.offsetWidth;
+    hero.classList.add('flash');
     // reset nodes after delay
     setTimeout(() => {
       ['mic','vad','asr','vp'].forEach(n => setNode(n, ''));
@@ -373,85 +470,51 @@ async function fetchHealth() {
 }
 
 // ──────────────────────────────────────────────
-// Recording
+// Server-side Recording (no HTTPS needed)
 // ──────────────────────────────────────────────
 async function toggleRecord() {
-  if (isRecording) return stopRecord();
-
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
-  } catch (e) {
-    addLog('sys', `⚠️ 无法访问麦克风: ${e.message}`);
-    return;
-  }
-
+  if (isRecording) return;
   isRecording = true;
-  recordChunks = [];
-  const btn = document.getElementById('recordBtn');
-  btn.className = 'record-btn recording';
-  document.getElementById('recordIcon').textContent = '⏹';
-
-  // Use AudioContext to get PCM
-  audioCtx = new AudioContext({ sampleRate: 16000 });
-  const src = audioCtx.createMediaStreamSource(mediaStream);
-  processor = audioCtx.createScriptProcessor(4096, 1, 1);
-  processor.onaudioprocess = (e) => {
-    recordChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-  };
-  src.connect(processor);
-  processor.connect(audioCtx.destination);
-
-  let secs = 5;
-  document.getElementById('recordLabel').textContent = `录音中... ${secs}秒`;
-  recordTimer = setInterval(() => {
-    secs--;
-    document.getElementById('recordLabel').textContent = secs > 0 ? `录音中... ${secs}秒` : '处理中...';
-    if (secs <= 0) stopRecord();
-  }, 1000);
-}
-
-function stopRecord() {
-  if (!isRecording) return;
-  isRecording = false;
-  clearInterval(recordTimer);
-
-  processor.disconnect();
-  mediaStream.getTracks().forEach(t => t.stop());
-  audioCtx.close();
-
-  // Merge float32 arrays → int16 WAV
-  const total = recordChunks.reduce((s, c) => s + c.length, 0);
-  const merged = new Float32Array(total);
-  let offset = 0;
-  for (const c of recordChunks) { merged.set(c, offset); offset += c.length; }
-
-  const int16 = new Int16Array(merged.length);
-  for (let i = 0; i < merged.length; i++) int16[i] = Math.max(-32768, Math.min(32767, merged[i] * 32768));
-
-  const wav = buildWav(int16.buffer, 16000);
-  recordedBlob = new Blob([wav], { type: 'audio/wav' });
+  recordedBlob = null;
   selectedFile = null;
 
-  document.getElementById('recordBtn').className = 'record-btn done';
-  document.getElementById('recordIcon').textContent = '✅';
-  document.getElementById('recordLabel').textContent = `录音完成 (${(total/16000).toFixed(1)}秒)`;
-  document.getElementById('fileInfo').textContent = `录音文件: ${(wav.byteLength/1024).toFixed(1)} KB`;
-  checkSubmit();
-}
+  const btn = document.getElementById('recordBtn');
+  btn.className = 'record-btn recording';
+  document.getElementById('recordIcon').textContent = '⏺';
 
-function buildWav(pcmBuffer, sampleRate) {
-  const dataLen = pcmBuffer.byteLength;
-  const buf = new ArrayBuffer(44 + dataLen);
-  const v = new DataView(buf);
-  const w = (off, str) => { for (let i=0;i<str.length;i++) v.setUint8(off+i, str.charCodeAt(i)); };
-  w(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true);
-  w(8, 'WAVE'); w(12, 'fmt ');
-  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
-  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-  w(36, 'data'); v.setUint32(40, dataLen, true);
-  new Uint8Array(buf, 44).set(new Uint8Array(pcmBuffer));
-  return buf;
+  const SECS = 5;
+  let remaining = SECS;
+  document.getElementById('recordLabel').textContent = `服务器录音中... ${remaining}s`;
+  const countdown = setInterval(() => {
+    remaining--;
+    if (remaining > 0) {
+      document.getElementById('recordLabel').textContent = `服务器录音中... ${remaining}s`;
+    } else {
+      document.getElementById('recordLabel').textContent = '处理中...';
+      clearInterval(countdown);
+    }
+  }, 1000);
+
+  try {
+    const resp = await fetch(`/api/record?seconds=${SECS}`);
+    clearInterval(countdown);
+    if (!resp.ok) throw new Error(`录音失败: HTTP ${resp.status}`);
+    const wavBlob = await resp.blob();
+    recordedBlob = new Blob([wavBlob], { type: 'audio/wav' });
+    btn.className = 'record-btn done';
+    document.getElementById('recordIcon').textContent = '✅';
+    document.getElementById('recordLabel').textContent = `录音完成 (${SECS}秒)`;
+    document.getElementById('fileInfo').textContent = `服务器录音: ${(recordedBlob.size/1024).toFixed(1)} KB`;
+    checkSubmit();
+  } catch (e) {
+    clearInterval(countdown);
+    btn.className = 'record-btn';
+    document.getElementById('recordIcon').textContent = '🎙️';
+    document.getElementById('recordLabel').textContent = '点击开始服务器录音（5秒）';
+    addLog('sys', `⚠️ 录音失败: ${e.message}`);
+  } finally {
+    isRecording = false;
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -540,6 +603,13 @@ function toggleRegister() {
   registerOpen = !registerOpen;
   document.getElementById('registerBody').style.display = registerOpen ? '' : 'none';
   document.getElementById('toggleArrow').textContent = registerOpen ? '▲' : '▼';
+}
+
+let llmOpen = false;
+function toggleLLM() {
+  llmOpen = !llmOpen;
+  document.getElementById('llmBody').style.display = llmOpen ? '' : 'none';
+  document.getElementById('llmArrow').textContent = llmOpen ? '▲' : '▼';
 }
 
 function esc(s) {

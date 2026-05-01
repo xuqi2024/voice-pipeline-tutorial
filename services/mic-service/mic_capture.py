@@ -15,14 +15,19 @@
 
 import argparse
 import asyncio
+import io
 import json
 import logging
 import os
 import struct
 import subprocess
 import sys
+import threading
 import time
-from queue import Queue, Empty
+import wave
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from queue import Empty, Queue
+from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 import sounddevice as sd
@@ -46,6 +51,77 @@ _ENV_DEVICE = os.environ.get("MIC_DEVICE_INDEX")
 _ENV_KEYWORD = os.environ.get("MIC_KEYWORD", "USB")
 _ENV_URL = os.environ.get("VAD_WS_URL", "ws://vad-service:8765")
 _ENV_DEBUG = os.environ.get("MIC_DEBUG", "").lower() in ("1", "true", "yes")
+
+# ──────────────────── 服务端录音 HTTP 服务 ────────────────────
+MIC_HTTP_PORT = int(os.environ.get("MIC_HTTP_PORT", "8001"))
+
+_record_lock = threading.Lock()
+_record_chunks: list = []
+_recording = False
+_record_target_chunks = 0
+
+
+def _build_wav(chunks: list) -> bytes:
+    raw = b"".join(chunks)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes(raw)
+    return buf.getvalue()
+
+
+class RecordHandler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass  # 静默 HTTP 日志
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+    def do_GET(self):
+        global _recording, _record_chunks, _record_target_chunks
+        parsed = urlparse(self.path)
+        if parsed.path != "/record":
+            self.send_error(404)
+            return
+
+        qs = parse_qs(parsed.query)
+        seconds = int(qs.get("seconds", ["5"])[0])
+        seconds = max(1, min(seconds, 30))
+        target = seconds * SAMPLE_RATE // CHUNK_SAMPLES
+
+        with _record_lock:
+            _record_chunks = []
+            _record_target_chunks = target
+            _recording = True
+
+        logger.info(f"开始服务端录音 {seconds}s ({target} 块)...")
+        deadline = time.time() + seconds + 1.0
+        while _recording and time.time() < deadline:
+            time.sleep(0.05)
+
+        with _record_lock:
+            _recording = False
+            chunks = list(_record_chunks)
+
+        wav = _build_wav(chunks)
+        logger.info(f"录音完成: {len(chunks)} 块, {len(wav)} 字节")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(wav)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(wav)
+
+
+def start_record_http_server():
+    server = HTTPServer(("0.0.0.0", MIC_HTTP_PORT), RecordHandler)
+    logger.info(f"录音 HTTP 服务: http://0.0.0.0:{MIC_HTTP_PORT}/record?seconds=5")
+    server.serve_forever()
 
 
 def unmute_usb_mic(card: int = 1):
@@ -142,9 +218,16 @@ async def stream_microphone(
     def audio_callback(indata, frames, time_info, status):
         if status:
             logger.warning(f"音频状态: {status}")
-        # indata is numpy array; convert to int16 bytes
         pcm = (indata[:, 0] * 32767).astype(np.int16).tobytes()
         audio_queue.put_nowait(pcm)
+
+        # 服务端录音缓冲
+        global _recording
+        if _recording:
+            with _record_lock:
+                _record_chunks.append(pcm)
+                if len(_record_chunks) >= _record_target_chunks:
+                    _recording = False
 
     logger.info(f"麦克风已启动，连接 VAD 服务: {vad_url}")
     print("开始录音，按 Ctrl+C 停止...\n")
@@ -232,6 +315,8 @@ def main():
         unmute_usb_mic(card=int(card_match.group(1)))
 
     try:
+        # 启动服务端录音 HTTP 服务（后台线程）
+        threading.Thread(target=start_record_http_server, daemon=True).start()
         asyncio.run(stream_microphone(device_index, vad_url, debug))
     except KeyboardInterrupt:
         print("\n\n已停止录音")

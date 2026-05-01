@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 PORT = int(os.getenv("PORT", "8080"))
 VOICEPRINT_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005")
 API_KEY = os.getenv("VOICEPRINT_API_KEY", "de395e06-035c-44f9-9a6b-8ef126a8bea0")
+MIC_SERVICE_URL = os.getenv("MIC_SERVICE_URL", "http://mic-service:8001")
 
 app = FastAPI(title="Voice Pipeline Dashboard", docs_url="/api/docs")
 
@@ -92,6 +93,23 @@ async def websocket_endpoint(ws: WebSocket):
             await asyncio.wait_for(ws.receive_text(), timeout=60)
     except (WebSocketDisconnect, asyncio.TimeoutError, Exception):
         manager.disconnect(ws)
+
+
+@app.get("/api/record")
+async def server_record(seconds: int = 5):
+    """触发服务器端录音并返回 WAV 文件（解决浏览器 HTTP 下 getUserMedia 限制）"""
+    seconds = max(1, min(seconds, 30))
+    try:
+        async with httpx.AsyncClient(timeout=seconds + 5.0) as client:
+            resp = await client.get(f"{MIC_SERVICE_URL}/record", params={"seconds": seconds})
+        if resp.status_code == 200:
+            from fastapi.responses import Response
+            return Response(content=resp.content, media_type="audio/wav")
+        raise HTTPException(status_code=resp.status_code, detail="录音服务返回错误")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="无法连接到麦克风服务")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ──────────────────────────── 声纹 API 代理 ───────────────────

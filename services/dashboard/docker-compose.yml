@@ -9,6 +9,7 @@ services:
       - PORT=8080
       - VOICEPRINT_API_URL=http://voiceprint-api:8005
       - VOICEPRINT_API_KEY=de395e06-035c-44f9-9a6b-8ef126a8bea0
+      - MIC_SERVICE_URL=http://mic-service:8001
     networks:
       - voice-pipeline
     healthcheck:

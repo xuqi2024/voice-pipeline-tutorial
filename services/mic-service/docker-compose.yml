@@ -6,12 +6,13 @@ services:
     # 传入主机音频设备（以 root 运行，绕过 audio 组限制）
     devices:
       - /dev/snd:/dev/snd
+    ports:
+      - "8001:8001"
     environment:
       - VAD_WS_URL=ws://vad-service:8765
-      # Auto-discover UGREEN Camera by name (index differs inside Docker vs host)
-      # Set MIC_KEYWORD to override the search keyword
       - MIC_KEYWORD=UGREEN
       - MIC_DEBUG=true
+      - MIC_HTTP_PORT=8001
     networks:
       - voice-pipeline
 
