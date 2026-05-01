@@ -46,6 +46,7 @@ MAX_SPEECH_MS = int(os.getenv("MAX_SPEECH_MS", "10000"))
 
 FUNASR_WS_URL = os.getenv("FUNASR_WS_URL", "ws://funasr:10095")
 VOICEPRINT_API_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005")
+VOICEPRINT_API_KEY = os.getenv("VOICEPRINT_API_KEY", "de395e06-035c-44f9-9a6b-8ef126a8bea0")
 
 MIN_SILENCE_CHUNKS = int(MIN_SILENCE_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 MIN_SPEECH_CHUNKS = int(MIN_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
@@ -121,11 +122,13 @@ async def identify_speaker(wav_bytes: bytes) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{VOICEPRINT_API_URL}/voiceprint/identify",
-                files={"audio": ("audio.wav", wav_bytes, "audio/wav")},
+                headers={"Authorization": f"Bearer {VOICEPRINT_API_KEY}"},
+                files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+                data={"speaker_ids": ""},
             )
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("is_identified"):
+                if data.get("speaker_id"):
                     return {
                         "id": data["speaker_id"],
                         "score": round(data["score"], 3),

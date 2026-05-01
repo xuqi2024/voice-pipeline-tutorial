@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import struct
+import subprocess
 import sys
 import time
 from queue import Queue, Empty
@@ -45,6 +46,33 @@ _ENV_DEVICE = os.environ.get("MIC_DEVICE_INDEX")
 _ENV_KEYWORD = os.environ.get("MIC_KEYWORD", "USB")
 _ENV_URL = os.environ.get("VAD_WS_URL", "ws://vad-service:8765")
 _ENV_DEBUG = os.environ.get("MIC_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def unmute_usb_mic(card: int = 1):
+    """
+    USB 麦克风在 Linux 上默认 Capture Switch 为 off，需要手动打开。
+    通过 amixer 自动启用所有 USB 音频卡的 Capture Switch。
+    """
+    try:
+        result = subprocess.run(
+            ["amixer", "-c", str(card), "contents"],
+            capture_output=True, text=True, timeout=3
+        )
+        for line in result.stdout.splitlines():
+            if "Capture Switch" in line and "numid=" in line:
+                numid = line.split("numid=")[1].split(",")[0]
+                val_result = subprocess.run(
+                    ["amixer", "-c", str(card), "cget", f"numid={numid}"],
+                    capture_output=True, text=True, timeout=3
+                )
+                if ": values=off" in val_result.stdout:
+                    subprocess.run(
+                        ["amixer", "-c", str(card), "cset", f"numid={numid}", "on"],
+                        capture_output=True, timeout=3
+                    )
+                    logger.info(f"已启用麦克风 Capture Switch (card={card}, numid={numid})")
+    except Exception as e:
+        logger.debug(f"unmute_usb_mic: {e}")
 
 
 def find_microphone_device(keyword: str = None) -> int:
@@ -194,6 +222,14 @@ def main():
 
     d = sd.query_devices(device_index)
     logger.info(f"使用麦克风: [{device_index}] {d['name']}")
+
+    # Unmute USB mic capture switch (defaults to off on Linux)
+    # Extract card number from device name like "hw:1,0"
+    dev_name = d.get("name", "")
+    import re
+    card_match = re.search(r'hw:(\d+)', dev_name)
+    if card_match:
+        unmute_usb_mic(card=int(card_match.group(1)))
 
     try:
         asyncio.run(stream_microphone(device_index, vad_url, debug))

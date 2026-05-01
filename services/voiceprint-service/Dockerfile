@@ -41,6 +41,10 @@ RUN pip install --no-cache-dir \
 # 复制配置文件
 COPY voiceprint.yaml /app/data/.voiceprint.yaml
 
+# 应用补丁：允许 speaker_ids 为空（搜索全部已注册说话人）
+COPY patches/api/v1/voiceprint.py /app/app/api/v1/voiceprint.py
+COPY patches/services/voiceprint_service.py /app/app/services/voiceprint_service.py
+
 EXPOSE 8005
 
 CMD ["python", "-m", "app.main"]
