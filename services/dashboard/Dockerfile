@@ -4,7 +4,8 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
     fastapi==0.110.2 \
-    uvicorn==0.29.0 \
+    "uvicorn[standard]==0.29.0" \
+    websockets==12.0 \
     httpx==0.27.0 \
     python-multipart==0.0.9
 

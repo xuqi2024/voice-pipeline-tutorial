@@ -15,6 +15,7 @@ services:
       # funasr 和 voiceprint-api 通过共享网络访问
       - FUNASR_WS_URL=ws://funasr:10095
       - VOICEPRINT_API_URL=http://voiceprint-api:8005
+      - VOICEPRINT_API_KEY=de395e06-035c-44f9-9a6b-8ef126a8bea0
       - DASHBOARD_URL=http://dashboard:8080
     networks:
       - voice-pipeline
