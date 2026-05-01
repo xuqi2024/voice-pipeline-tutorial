@@ -1,0 +1,52 @@
+services:
+  funasr:
+    # 官方中文实时语音听写服务镜像
+    # 详见: https://github.com/modelscope/FunASR/blob/main/runtime/readme_cn.md
+    image: registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.12
+    container_name: funasr
+    restart: unless-stopped
+    ports:
+      - "10095:10095"
+    volumes:
+      - funasr-models:/workspace/models
+      - ./hotwords.txt:/workspace/hotwords.txt:ro
+    command:
+      - /workspace/FunASR/runtime/websocket/build/bin/funasr-wss-server-2pass
+      - --download-model-dir
+      - /workspace/models
+      - --model-dir
+      - damo/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-onnx
+      - --online-model-dir
+      - damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx
+      - --vad-dir
+      - damo/speech_fsmn_vad_zh-cn-16k-common-onnx
+      - --punc-dir
+      - damo/punc_ct-transformer_zh-cn-common-vad_realtime-vocab272727-onnx
+      - --itn-dir
+      - thuduj12/fst_itn_zh
+      - --lm-dir
+      - damo/speech_ngram_lm_zh-cn-ai-wesp-fst
+      - --port
+      - "10095"
+      - --certfile
+      - ""
+      - --keyfile
+      - ""
+      - --hotword
+      - /workspace/hotwords.txt
+    networks:
+      - voice-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "cat /dev/null > /dev/tcp/localhost/10095 && echo ok || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  funasr-models:
+
+networks:
+  voice-pipeline:
+    external: true
+    name: voice-pipeline

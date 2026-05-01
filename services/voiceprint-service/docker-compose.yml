@@ -1,0 +1,51 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: voiceprint-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: voiceprint123
+      MYSQL_DATABASE: voiceprint_db
+      MYSQL_USER: voiceprint
+      MYSQL_PASSWORD: voiceprint123
+    volumes:
+      - voiceprint-mysql-data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - voice-pipeline
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pvoiceprint123"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  voiceprint-api:
+    build: .
+    container_name: voiceprint-api
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    volumes:
+      - voiceprint-models:/root/.cache/modelscope
+      - ./voiceprint.yaml:/app/data/.voiceprint.yaml
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - voice-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8005/voiceprint/docs > /dev/null || curl -sf http://localhost:8005/ > /dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+volumes:
+  voiceprint-mysql-data:
+  voiceprint-models:
+
+networks:
+  voice-pipeline:
+    external: true
+    name: voice-pipeline

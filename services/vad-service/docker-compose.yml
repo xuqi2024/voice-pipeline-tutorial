@@ -1,0 +1,31 @@
+services:
+  vad-service:
+    build: .
+    container_name: vad-service
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8765
+      - VAD_THRESHOLD=0.5
+      - MIN_SPEECH_MS=250
+      - MIN_SILENCE_MS=300
+      - MAX_SPEECH_MS=10000
+      # funasr 和 voiceprint-api 通过共享网络访问
+      - FUNASR_WS_URL=ws://funasr:10095
+      - VOICEPRINT_API_URL=http://voiceprint-api:8005
+    networks:
+      - voice-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import websockets; print('ok')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  # 外部共享网络：由 start-all.sh 创建
+  # 所有服务（funasr, voiceprint-api, vad-service）都加入此网络
+  voice-pipeline:
+    external: true
+    name: voice-pipeline

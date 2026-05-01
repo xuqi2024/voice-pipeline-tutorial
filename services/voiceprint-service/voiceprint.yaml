@@ -1,0 +1,13 @@
+model:
+  model_id: iic/speech_campplus_sv_zh-cn_16k-common
+  threshold: 0.7
+mysql:
+  database: voiceprint_db
+  host: mysql
+  password: voiceprint123
+  port: 3306
+  user: voiceprint
+server:
+  authorization: de395e06-035c-44f9-9a6b-8ef126a8bea0
+  host: 0.0.0.0
+  port: 8005
