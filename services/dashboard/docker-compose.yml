@@ -1,0 +1,23 @@
+services:
+  dashboard:
+    build: .
+    container_name: dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - VOICEPRINT_API_URL=http://voiceprint-api:8005
+      - VOICEPRINT_API_KEY=de395e06-035c-44f9-9a6b-8ef126a8bea0
+    networks:
+      - voice-pipeline
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  voice-pipeline:
+    external: true
+    name: voice-pipeline

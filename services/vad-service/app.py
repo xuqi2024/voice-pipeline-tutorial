@@ -47,6 +47,7 @@ MAX_SPEECH_MS = int(os.getenv("MAX_SPEECH_MS", "10000"))
 FUNASR_WS_URL = os.getenv("FUNASR_WS_URL", "ws://funasr:10095")
 VOICEPRINT_API_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005")
 VOICEPRINT_API_KEY = os.getenv("VOICEPRINT_API_KEY", "de395e06-035c-44f9-9a6b-8ef126a8bea0")
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "")  # 留空则不推送
 
 MIN_SILENCE_CHUNKS = int(MIN_SILENCE_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 MIN_SPEECH_CHUNKS = int(MIN_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
@@ -63,6 +64,17 @@ def build_wav_bytes(pcm_chunks: list[bytes]) -> bytes:
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(raw)
     return buf.getvalue()
+
+
+async def push_event(event: dict):
+    """推送管道事件到 Dashboard（fire-and-forget，失败不影响主流程）"""
+    if not DASHBOARD_URL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.post(f"{DASHBOARD_URL}/api/vad-event", json=event)
+    except Exception:
+        pass  # dashboard 不可用时静默忽略
 
 
 async def recognize_with_funasr(wav_bytes: bytes) -> Optional[str]:
@@ -178,6 +190,7 @@ async def handle_client(websocket):
                         silence_chunks = 0
                         speech_buffer = [chunk]
                         logger.info(f"▶ 检测到语音开始 (prob={prob:.2f})")
+                        asyncio.create_task(push_event({"type": "speech_start", "prob": round(prob, 3)}))
                 else:
                     speech_buffer.append(chunk)
                     speech_chunks += 1
@@ -192,6 +205,7 @@ async def handle_client(websocket):
                         if speech_chunks >= MIN_SPEECH_CHUNKS:
                             duration_ms = speech_chunks * CHUNK_SAMPLES / SAMPLE_RATE * 1000
                             logger.info(f"■ 语音结束 ({duration_ms:.0f}ms, {len(speech_buffer)} 块)")
+                            asyncio.create_task(push_event({"type": "speech_end", "duration_ms": round(duration_ms)}))
 
                             wav_bytes = build_wav_bytes(speech_buffer)
 
@@ -200,11 +214,24 @@ async def handle_client(websocket):
                             vp_task = asyncio.create_task(identify_speaker(wav_bytes))
                             text, speaker = await asyncio.gather(asr_task, vp_task)
 
+                            # 推送各自结果到 Dashboard
+                            asyncio.create_task(push_event({"type": "asr_result", "text": text or ""}))
+                            asyncio.create_task(push_event({
+                                "type": "voiceprint_result",
+                                "speaker": speaker["id"] if speaker else None,
+                                "score": speaker["score"] if speaker else None,
+                            }))
+
                             result = {
                                 "text": text or "",
                                 "speaker": speaker,
                             }
                             logger.info(f"结果: text={text!r} speaker={speaker}")
+                            asyncio.create_task(push_event({
+                                "type": "result",
+                                "text": text or "",
+                                "speaker": speaker["id"] if speaker else None,
+                            }))
                             await websocket.send(json.dumps(result, ensure_ascii=False))
                         else:
                             logger.debug("语音片段太短，忽略")
