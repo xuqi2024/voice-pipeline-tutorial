@@ -153,7 +153,18 @@ async def identify_speaker(wav_bytes: bytes) -> Optional[dict]:
 async def handle_client(websocket):
     """处理单个 WebSocket 客户端连接"""
     addr = websocket.remote_address
-    logger.info(f"客户端连接: {addr}")
+
+    # 从 URL 查询参数中提取设备 ID，例如 ws://host:8765?device=esp32-01
+    from urllib.parse import urlparse, parse_qs
+    try:
+        # websockets v12: use websocket.path (set during HTTP handshake)
+        raw_path = getattr(websocket, "path", None) or getattr(websocket, "request_uri", "")
+        qs = parse_qs(urlparse(raw_path).query)
+        device_id = qs.get("device", [f"{addr[0]}"])[0]
+    except Exception:
+        device_id = str(addr[0])
+
+    logger.info(f"客户端连接: {addr} device={device_id}")
 
     # 每个连接独立的 VAD 模型实例（线程安全）
     model = load_silero_vad()
@@ -189,8 +200,8 @@ async def handle_client(websocket):
                         speech_chunks = 1
                         silence_chunks = 0
                         speech_buffer = [chunk]
-                        logger.info(f"▶ 检测到语音开始 (prob={prob:.2f})")
-                        asyncio.create_task(push_event({"type": "speech_start", "prob": round(prob, 3)}))
+                        logger.info(f"▶ 检测到语音开始 [{device_id}] (prob={prob:.2f})")
+                        asyncio.create_task(push_event({"type": "speech_start", "prob": round(prob, 3), "device": device_id}))
                 else:
                     speech_buffer.append(chunk)
                     speech_chunks += 1
@@ -204,8 +215,8 @@ async def handle_client(websocket):
                     if silence_chunks >= MIN_SILENCE_CHUNKS:
                         if speech_chunks >= MIN_SPEECH_CHUNKS:
                             duration_ms = speech_chunks * CHUNK_SAMPLES / SAMPLE_RATE * 1000
-                            logger.info(f"■ 语音结束 ({duration_ms:.0f}ms, {len(speech_buffer)} 块)")
-                            asyncio.create_task(push_event({"type": "speech_end", "duration_ms": round(duration_ms)}))
+                            logger.info(f"■ 语音结束 [{device_id}] ({duration_ms:.0f}ms, {len(speech_buffer)} 块)")
+                            asyncio.create_task(push_event({"type": "speech_end", "duration_ms": round(duration_ms), "device": device_id}))
 
                             wav_bytes = build_wav_bytes(speech_buffer)
 
@@ -215,22 +226,24 @@ async def handle_client(websocket):
                             text, speaker = await asyncio.gather(asr_task, vp_task)
 
                             # 推送各自结果到 Dashboard
-                            asyncio.create_task(push_event({"type": "asr_result", "text": text or ""}))
+                            asyncio.create_task(push_event({"type": "asr_result", "text": text or "", "device": device_id}))
                             asyncio.create_task(push_event({
                                 "type": "voiceprint_result",
                                 "speaker": speaker["id"] if speaker else None,
                                 "score": speaker["score"] if speaker else None,
+                                "device": device_id,
                             }))
 
                             result = {
                                 "text": text or "",
                                 "speaker": speaker,
                             }
-                            logger.info(f"结果: text={text!r} speaker={speaker}")
+                            logger.info(f"结果 [{device_id}]: text={text!r} speaker={speaker}")
                             asyncio.create_task(push_event({
                                 "type": "result",
                                 "text": text or "",
                                 "speaker": speaker["id"] if speaker else None,
+                                "device": device_id,
                             }))
                             await websocket.send(json.dumps(result, ensure_ascii=False))
                         else:
@@ -258,7 +271,7 @@ async def handle_client(websocket):
                         speech_buffer = []
 
     except websockets.exceptions.ConnectionClosed:
-        logger.info(f"客户端断开: {addr}")
+        logger.info(f"客户端断开: {addr} device={device_id}")
     except Exception as e:
         logger.error(f"处理客户端出错: {e}", exc_info=True)
 

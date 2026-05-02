@@ -72,6 +72,7 @@
   .log-text .highlight { color: var(--yellow); font-weight: 600; }
   .log-text .speaker { color: var(--purple); font-weight: 600; }
   .log-text .asr-text { color: var(--green); }
+  .log-text .dev-tag { background: rgba(57,211,83,.15); color: var(--cyan); border-radius: 3px; padding: 0 4px; font-size: 10px; font-weight: 600; vertical-align: middle; margin-right: 2px; }
 
   /* ── Latest result hero ── */
   .result-hero { background: var(--bg3); border-radius: 12px; border: 1px solid var(--border); padding: 14px; margin-top: 4px; }
@@ -348,6 +349,7 @@ function setConn(ok) {
 // ──────────────────────────────────────────────
 function handleEvent(ev) {
   const t = ev.type;
+  const dev = ev.device ? `<span class="dev-tag">${esc(ev.device)}</span> ` : '';
 
   if (t === 'speech_start') {
     stats.detected++;
@@ -355,21 +357,21 @@ function handleEvent(ev) {
     setNode('mic', 'active'); setNode('vad', 'processing');
     setSt('mic', '🎤 检测到语音', 'ok');
     setSt('vad', `prob=${ev.prob?.toFixed(2)}`, 'ok');
-    addLog('vad', `▶ 语音开始 <span class="highlight">prob=${ev.prob?.toFixed(2)}</span>`);
+    addLog('vad', `${dev}▶ 语音开始 <span class="highlight">prob=${ev.prob?.toFixed(2)}</span>`);
 
   } else if (t === 'speech_end') {
     setNode('vad', 'active'); setNode('asr', 'processing'); setNode('vp', 'processing');
     setSt('vad', `${ev.duration_ms?.toFixed(0)}ms`, 'ok');
     setSt('asr', '识别中...', '');
     setSt('vp', '识别中...', '');
-    addLog('vad', `■ 语音结束 <span class="highlight">${ev.duration_ms?.toFixed(0)}ms</span>`);
+    addLog('vad', `${dev}■ 语音结束 <span class="highlight">${ev.duration_ms?.toFixed(0)}ms</span>`);
 
   } else if (t === 'asr_result') {
     stats.recognized++;
     document.getElementById('statRecognized').textContent = stats.recognized;
     setNode('asr', 'active');
     setSt('asr', ev.text || '（空）', 'ok');
-    addLog('asr', `📝 <span class="asr-text">${esc(ev.text)}</span>`);
+    addLog('asr', `${dev}📝 <span class="asr-text">${esc(ev.text)}</span>`);
 
   } else if (t === 'voiceprint_result') {
     setNode('vp', 'active');
@@ -377,10 +379,10 @@ function handleEvent(ev) {
       stats.identified++;
       document.getElementById('statIdentified').textContent = stats.identified;
       setSt('vp', `${ev.speaker} (${ev.score?.toFixed(2)})`, 'ok');
-      addLog('vp', `👤 说话人：<span class="speaker">${esc(ev.speaker)}</span> 分数：<span class="highlight">${ev.score?.toFixed(3)}</span>`);
+      addLog('vp', `${dev}👤 说话人：<span class="speaker">${esc(ev.speaker)}</span> 分数：<span class="highlight">${ev.score?.toFixed(3)}</span>`);
     } else {
       setSt('vp', '未识别', '');
-      addLog('vp', '👤 未匹配已注册说话人');
+      addLog('vp', `${dev}👤 未匹配已注册说话人`);
     }
 
   } else if (t === 'result') {
@@ -400,7 +402,8 @@ function handleEvent(ev) {
     txtEl.style.color = txt ? 'var(--green)' : 'var(--muted)';
     // Meta
     const now = new Date().toTimeString().slice(0,8);
-    document.getElementById('lastMeta').textContent = `识别时间: ${now}`;
+    const devLabel = ev.device ? ` | 设备: ${ev.device}` : '';
+    document.getElementById('lastMeta').textContent = `识别时间: ${now}${devLabel}`;
     // Flash animation
     hero.classList.remove('flash');
     void hero.offsetWidth;

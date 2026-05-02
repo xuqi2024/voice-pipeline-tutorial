@@ -1,6 +1,9 @@
 # WiFi 配置 (不提交到 Git)
 # 复制此文件为 wifi_config.h 并填入实际信息
 #pragma once
-#define WIFI_SSID  "YOUR_WIFI_SSID"
-#define WIFI_PASS  "YOUR_WIFI_PASSWORD"
-#define VAD_WS_URL "ws://192.168.1.8:8765"
+#define WIFI_SSID   "YOUR_WIFI_SSID"
+#define WIFI_PASS   "YOUR_WIFI_PASSWORD"
+/* VAD 服务地址，加 ?device=xxx 参数可在 Dashboard 区分多设备 */
+#define VAD_WS_URL  "ws://192.168.1.8:8765?device=esp32-01"
+/* 显示在 OLED 第一行的设备名称（最多 18 字符） */
+#define DEVICE_NAME "ESP32-01"

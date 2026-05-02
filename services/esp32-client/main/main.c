@@ -61,19 +61,41 @@ static volatile bool  s_ws_connected   = false;
 static volatile int   s_recog_count    = 0;
 static char           s_last_text[128] = "";
 static char           s_last_speaker[64] = "";
+static char           s_last_speaker_score[32] = "";  /* "Spk:0.54" ASCII for OLED */
 
 /* ─── display helpers ─────────────────────────────────────────────── */
+
+/* Count the number of UTF-8 code-points (characters) in a string.
+ * Skips continuation bytes (0x80-0xBF) so multi-byte sequences count as 1. */
+static int utf8_charcount(const char *s) {
+    int n = 0;
+    while (*s) {
+        if ((*s & 0xC0) != 0x80) n++;   /* leading byte of any code-point */
+        s++;
+    }
+    return n;
+}
+
 static void disp_update(void) {
     if (!s_display_ok) return;
     ssd1306_clear();
-    ssd1306_puts(0, 0, "ESP32 VoiceClient");
-    ssd1306_puts(0, 1, s_ws_connected ? "WS: Connected  " : "WS: Connecting ");
-    ssd1306_printf(0, 2, "Count: %d", s_recog_count);
-    /* show last 20 chars of text to fit display */
-    int tlen = strlen(s_last_text);
-    const char *tstart = (tlen > 20) ? s_last_text + tlen - 20 : s_last_text;
-    ssd1306_puts(0, 4, tstart);
-    ssd1306_puts(0, 5, s_last_speaker);
+
+    /* Row 0: device name (from DEVICE_NAME macro in wifi_config.h) */
+    ssd1306_puts(0, 0, DEVICE_NAME);
+
+    /* Row 1: WebSocket connection status */
+    ssd1306_puts(0, 1, s_ws_connected ? "WS: Connected   " : "WS: Connecting..");
+
+    /* Row 2: total recognition count */
+    ssd1306_printf(0, 2, "Recog: %d", s_recog_count);
+
+    /* Row 3: last text info — char count (works for Chinese) + speaker match */
+    int nchar = utf8_charcount(s_last_text);
+    int has_spk = (s_last_speaker[0] != '\0');
+    ssd1306_printf(0, 3, "Len:%-3d Spk:%s", nchar, has_spk ? "Y" : "N");
+
+    /* Row 4-5: speaker score or "no match" (ASCII only) */
+    ssd1306_puts(0, 4, has_spk ? s_last_speaker_score : "");
     ssd1306_flush();
 }
 
@@ -118,12 +140,16 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
                         s_recog_count++;
                     }
                     if (spk_id && cJSON_IsString(spk_id)) {
+                        strncpy(s_last_speaker, spk_id->valuestring, sizeof(s_last_speaker) - 1);
                         if (score && cJSON_IsNumber(score)) {
-                            snprintf(s_last_speaker, sizeof(s_last_speaker),
-                                     "%s(%.2f)", spk_id->valuestring, score->valuedouble);
+                            snprintf(s_last_speaker_score, sizeof(s_last_speaker_score),
+                                     "Score:%.2f", score->valuedouble);
                         } else {
-                            strncpy(s_last_speaker, spk_id->valuestring, sizeof(s_last_speaker) - 1);
+                            strncpy(s_last_speaker_score, "Score:--", sizeof(s_last_speaker_score) - 1);
                         }
+                    } else {
+                        s_last_speaker[0] = '\0';
+                        s_last_speaker_score[0] = '\0';
                     }
 
                     ESP_LOGI(TAG, "=== 识别结果 [%d] ===", s_recog_count);
@@ -317,7 +343,7 @@ void app_main(void) {
     /* Optional SSD1306 display (gracefully skip if not present) */
     if (ssd1306_init(I2C_NUM_0, DISP_SDA, DISP_SCL, 0x3C) == ESP_OK) {
         s_display_ok = true;
-        ssd1306_puts(0, 0, "ESP32 VoiceClient");
+        ssd1306_puts(0, 0, DEVICE_NAME);
         ssd1306_puts(0, 1, "Connecting WiFi ");
         ssd1306_flush();
         ESP_LOGI(TAG, "✅ SSD1306 显示屏已初始化");
@@ -335,7 +361,7 @@ void app_main(void) {
 
     if (s_display_ok) {
         ssd1306_clear();
-        ssd1306_puts(0, 0, "ESP32 VoiceClient");
+        ssd1306_puts(0, 0, DEVICE_NAME);
         ssd1306_puts(0, 1, "WiFi Connected! ");
         ssd1306_puts(0, 2, "Connecting WS...");
         ssd1306_flush();
