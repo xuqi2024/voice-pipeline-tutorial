@@ -148,14 +148,14 @@ esp_err_t ssd1306_init(i2c_port_t port, int sda_io, int scl_io, uint8_t addr) {
     static const uint8_t init_seq[] = {
         0xAE,       // display off
         0xD5, 0x80, // clock divide
-        0xA8, 63,   // multiplex ratio
+        0xA8, 0x1F, // multiplex ratio = 31 (32 rows - 1)
         0xD3, 0x00, // display offset
         0x40,       // start line 0
         0x8D, 0x14, // charge pump on
         0x20, 0x00, // horizontal addressing
         0xA1,       // seg remap
         0xC8,       // com output scan dir
-        0xDA, 0x12, // com pins config
+        0xDA, 0x02, // com pins config: sequential (for 32-row panels)
         0x81, 0xCF, // contrast
         0xD9, 0xF1, // pre-charge
         0xDB, 0x40, // vcomh deselect
@@ -178,7 +178,7 @@ void ssd1306_clear(void) {
 
 void ssd1306_flush(void) {
     _cmd(0x21); _cmd(0); _cmd(127); // col 0..127
-    _cmd(0x22); _cmd(0); _cmd(7);   // page 0..7
+    _cmd(0x22); _cmd(0); _cmd(3);   // page 0..3  (128×32 = 4 pages)
     _data_buf(s_fb, sizeof(s_fb));
 }
 

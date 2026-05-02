@@ -9,7 +9,7 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - VAD_WS_URL=ws://vad-service:8765
+      - VAD_WS_URL=ws://vad-service:8765?device=PC-Mic
       - MIC_KEYWORD=UGREEN
       - MIC_DEBUG=true
       - MIC_HTTP_PORT=8001

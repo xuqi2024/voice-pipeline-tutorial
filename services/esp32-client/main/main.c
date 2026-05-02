@@ -80,22 +80,23 @@ static void disp_update(void) {
     if (!s_display_ok) return;
     ssd1306_clear();
 
-    /* Row 0: device name (from DEVICE_NAME macro in wifi_config.h) */
+    /* Row 0: device name */
     ssd1306_puts(0, 0, DEVICE_NAME);
 
     /* Row 1: WebSocket connection status */
     ssd1306_puts(0, 1, s_ws_connected ? "WS: Connected   " : "WS: Connecting..");
 
-    /* Row 2: total recognition count */
-    ssd1306_printf(0, 2, "Recog: %d", s_recog_count);
-
-    /* Row 3: last text info — char count (works for Chinese) + speaker match */
+    /* Row 2: recognition count + char count of last text */
     int nchar = utf8_charcount(s_last_text);
-    int has_spk = (s_last_speaker[0] != '\0');
-    ssd1306_printf(0, 3, "Len:%-3d Spk:%s", nchar, has_spk ? "Y" : "N");
+    ssd1306_printf(0, 2, "N:%-4d Len:%-4d", s_recog_count, nchar);
 
-    /* Row 4-5: speaker score or "no match" (ASCII only) */
-    ssd1306_puts(0, 4, has_spk ? s_last_speaker_score : "");
+    /* Row 3: speaker match + score (pure ASCII, safe for OLED) */
+    int has_spk = (s_last_speaker[0] != '\0');
+    if (has_spk) {
+        ssd1306_printf(0, 3, "Spk:Y %s", s_last_speaker_score);
+    } else {
+        ssd1306_puts(0, 3, "Spk:N          ");
+    }
     ssd1306_flush();
 }
 
