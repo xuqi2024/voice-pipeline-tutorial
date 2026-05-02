@@ -376,6 +376,14 @@ function handleEvent(ev) {
       ['mic','vad','asr','vp'].forEach(n => setNode(n, ''));
     }, 3000);
 
+  } else if (t === 'tts_ready') {
+    const spkLabel = ev.speaker && ev.speaker !== 'unknown' ? ` [${esc(ev.speaker)}]` : '';
+    addLog('llm', `${dev}🔊${spkLabel} TTS 播放: <span style="color:var(--cyan)">"${esc(ev.reply)}"</span>`);
+    if (ev.audio_url) {
+      const audio = new Audio(ev.audio_url);
+      audio.play().catch(e => addLog('sys', `⚠️ 音频播放失败: ${e.message}`));
+    }
+
   } else if (t === 'llm_thinking') {
     addLog('llm', `${dev}⏳ <span class="llm-thinking">AI 思考中… "${esc(ev.text)}"</span>`);
     document.getElementById('llmReplyText').innerHTML = '<span class="llm-thinking">AI 思考中…</span>';

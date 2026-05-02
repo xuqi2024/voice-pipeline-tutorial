@@ -49,10 +49,14 @@ VOICEPRINT_API_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005
 VOICEPRINT_API_KEY = os.getenv("VOICEPRINT_API_KEY", "de395e06-035c-44f9-9a6b-8ef126a8bea0")
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "")  # 留空则不推送
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "")  # 留空则不调用 LLM
+HTTP_API_PORT = int(os.getenv("HTTP_API_PORT", "8767"))  # 内部 HTTP API 端口
 
 MIN_SILENCE_CHUNKS = int(MIN_SILENCE_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 MIN_SPEECH_CHUNKS = int(MIN_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 MAX_SPEECH_CHUNKS = int(MAX_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
+
+# 已连接的 WebSocket 设备注册表 { device_id: websocket }
+_connected_devices: dict = {}
 
 
 def build_wav_bytes(pcm_chunks: list[bytes]) -> bytes:
@@ -181,6 +185,9 @@ async def handle_client(websocket):
 
     logger.info(f"客户端连接: {addr} device={device_id}")
 
+    # 注册设备 WebSocket
+    _connected_devices[device_id] = websocket
+
     # 每个连接独立的 VAD 模型实例（线程安全）
     model = load_silero_vad()
     model.eval()
@@ -297,19 +304,71 @@ async def handle_client(websocket):
         logger.info(f"客户端断开: {addr} device={device_id}")
     except Exception as e:
         logger.error(f"处理客户端出错: {e}", exc_info=True)
+    finally:
+        _connected_devices.pop(device_id, None)
+
+
+async def _http_forward_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """极简 asyncio HTTP 服务，仅支持 POST /api/forward"""
+    try:
+        req_line = (await asyncio.wait_for(reader.readline(), timeout=5)).decode()
+        headers: dict[str, str] = {}
+        while True:
+            line = (await asyncio.wait_for(reader.readline(), timeout=5)).decode().strip()
+            if not line:
+                break
+            if ":" in line:
+                k, _, v = line.partition(":")
+                headers[k.lower().strip()] = v.strip()
+
+        clen = int(headers.get("content-length", "0"))
+        body_bytes = await asyncio.wait_for(reader.read(clen), timeout=5) if clen else b"{}"
+
+        ok = False
+        try:
+            data = json.loads(body_bytes)
+            device  = data.get("device", "")
+            message = data.get("message", {})
+            ws = _connected_devices.get(device)
+            if ws:
+                await ws.send(json.dumps(message, ensure_ascii=False))
+                ok = True
+                logger.info(f"转发 {message.get('type','?')} → {device}")
+            else:
+                logger.debug(f"设备 {device!r} 未连接，已知: {list(_connected_devices.keys())}")
+        except Exception as e:
+            logger.warning(f"forward handler error: {e}")
+
+        resp_body = b'{"ok":true}' if ok else b'{"ok":false}'
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            + b"Content-Length: " + str(len(resp_body)).encode()
+            + b"\r\nConnection: close\r\n\r\n"
+            + resp_body
+        )
+        await writer.drain()
+    except Exception as e:
+        logger.debug(f"HTTP handler error: {e}")
+    finally:
+        writer.close()
 
 
 async def main():
-    logger.info(f"加载 Silero VAD 模型...")
-    # 预热模型（验证可以加载）
+    logger.info("加载 Silero VAD 模型...")
     _model = load_silero_vad()
-    logger.info(f"VAD 服务启动: ws://{HOST}:{PORT}")
+    logger.info(f"VAD WebSocket 服务启动: ws://{HOST}:{PORT}")
+    logger.info(f"VAD HTTP API 启动: http://0.0.0.0:{HTTP_API_PORT}")
     logger.info(f"配置: threshold={VAD_THRESHOLD}, min_silence={MIN_SILENCE_MS}ms")
     logger.info(f"FunASR: {FUNASR_WS_URL}")
     logger.info(f"voiceprint-api: {VOICEPRINT_API_URL}")
 
+    http_server = await asyncio.start_server(
+        _http_forward_handler, "0.0.0.0", HTTP_API_PORT
+    )
+
     async with websockets.serve(handle_client, HOST, PORT):
-        await asyncio.Future()  # 永久运行
+        async with http_server:
+            await asyncio.Future()  # 永久运行
 
 
 if __name__ == "__main__":

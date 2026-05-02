@@ -5,14 +5,17 @@ LLM Service — 语音对话智能体
 并将结果推送到 Dashboard 实时展示。
 """
 
+import base64
 import json
 import logging
 import os
+import uuid
 from collections import defaultdict, deque
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 logging.basicConfig(
@@ -29,6 +32,10 @@ MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL",
                              "https://api.minimaxi.com/anthropic/v1/messages")
 MINIMAX_MODEL    = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
 DASHBOARD_URL    = os.getenv("DASHBOARD_URL", "http://dashboard:8080")
+TTS_SERVICE_URL  = os.getenv("TTS_SERVICE_URL", "http://172.18.0.1:8766")
+TTS_VOICE_ID     = os.getenv("TTS_VOICE_ID", "female-shaonv")
+VAD_SERVICE_URL  = os.getenv("VAD_SERVICE_URL", "http://vad-service:8767")
+HOST_IP          = os.getenv("HOST_IP", "192.168.1.8")
 
 SYSTEM_PROMPT = """你是一个简洁智能的语音助手，以自然的口语风格回答问题。
 规则：
@@ -40,7 +47,17 @@ SYSTEM_PROMPT = """你是一个简洁智能的语音助手，以自然的口语�
 # 每个说话人保留最近 10 轮对话历史
 histories: dict[str, deque] = defaultdict(lambda: deque(maxlen=20))
 
+# 音频缓存：audio_id → WAV bytes（最多保留 20 条）
+_audio_cache: dict[str, bytes] = {}
+_AUDIO_CACHE_MAX = 20
+
 app = FastAPI(title="LLM Service", version="1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
+)
 
 
 async def push_dashboard(event: dict):
@@ -51,6 +68,65 @@ async def push_dashboard(event: dict):
             await client.post(f"{DASHBOARD_URL}/api/vad-event", json=event)
     except Exception as e:
         logger.debug(f"push_dashboard failed: {e}")
+
+
+def _find_wav_data_offset(wav_bytes: bytes) -> int:
+    """Find the offset where PCM data starts in a WAV file (handles LIST chunks)."""
+    i = 12
+    while i < min(len(wav_bytes) - 8, 512):
+        chunk_id = wav_bytes[i:i+4]
+        if chunk_id == b'data':
+            return i + 8
+        chunk_size = int.from_bytes(wav_bytes[i+4:i+8], 'little')
+        i += 8 + (chunk_size + 1 & ~1)  # pad to even
+    return 44  # fallback
+
+
+async def call_tts(text: str) -> tuple[str, bytes] | None:
+    """调用 TTS 服务生成语音，返回 (audio_id, wav_bytes)"""
+    if not TTS_SERVICE_URL or not text:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{TTS_SERVICE_URL}/tts",
+                json={"text": text, "voice_id": TTS_VOICE_ID, "format": "wav"},
+            )
+            resp.raise_for_status()
+            wav_bytes = resp.content
+        audio_id = uuid.uuid4().hex[:12]
+        # LRU eviction
+        if len(_audio_cache) >= _AUDIO_CACHE_MAX:
+            del _audio_cache[next(iter(_audio_cache))]
+        _audio_cache[audio_id] = wav_bytes
+        logger.info(f"TTS: {len(wav_bytes)} bytes cached as {audio_id}")
+        return audio_id, wav_bytes
+    except Exception as e:
+        logger.warning(f"TTS call failed: {e}")
+        return None
+
+
+async def forward_to_device(device: str, message: dict):
+    """通过 VAD 服务将消息发送到指定设备的 WebSocket"""
+    if not VAD_SERVICE_URL or not device:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                f"{VAD_SERVICE_URL}/api/forward",
+                json={"device": device, "message": message},
+            )
+    except Exception as e:
+        logger.debug(f"forward_to_device({device}) failed: {e}")
+
+
+@app.get("/api/audio/{audio_id}")
+async def get_audio(audio_id: str):
+    """提供缓存的 TTS 音频文件"""
+    if audio_id not in _audio_cache:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return Response(content=_audio_cache[audio_id], media_type="audio/wav",
+                    headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/api/chat")
@@ -118,6 +194,28 @@ async def chat(body: dict):
         "speaker": speaker,
         "device": device,
     })
+
+    # 调用 TTS 生成语音
+    import asyncio
+    tts_result = await call_tts(reply)
+    if tts_result:
+        audio_id, wav_bytes = tts_result
+        audio_url = f"http://{HOST_IP}:8006/api/audio/{audio_id}"
+        # 推送 TTS 就绪事件到 Dashboard（含音频 URL，浏览器直接播放）
+        await push_dashboard({
+            "type": "tts_ready",
+            "reply": reply,
+            "speaker": speaker,
+            "device": device,
+            "audio_url": audio_url,
+            "audio_id": audio_id,
+        })
+        # 转发给 ESP32 设备
+        if device and "esp32" in device.lower():
+            asyncio.create_task(forward_to_device(device, {
+                "type": "tts_url",
+                "url": audio_url,
+            }))
 
     return {"reply": reply, "speaker": speaker, "device": device}
 

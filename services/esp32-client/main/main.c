@@ -3,48 +3,61 @@
  *
  * Hardware:
  *   INMP441 I2S mic  : WS=GPIO4, SCK=GPIO5, SD=GPIO6
- *   MAX98357A amp    : DIN=GPIO7, BCLK=GPIO15, LRC=GPIO16  (output – not used here)
+ *   MAX98357A amp    : DIN=GPIO7, BCLK=GPIO15, LRC=GPIO16
  *   SSD1306 display  : SDA=GPIO41, SCL=GPIO42  (optional)
  *
  * Data flow:
  *   I2S mic → 16-bit PCM 16kHz → WebSocket (binary) → VAD service
  *   VAD / ASR result (JSON text frame) → serial log + display
+ *   LLM reply TTS URL (JSON) → HTTP download → I2S speaker playback
  */
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#ifndef MIN
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
+#include "esp_http_client.h"
 #include "driver/i2s_std.h"
 #include "esp_websocket_client.h"
-#include "cJSON.h"  // ESP-IDF bundles cJSON as component "json"
+#include "cJSON.h"
 
-#include "wifi_config.h"   /* WIFI_SSID, WIFI_PASS, VAD_WS_URL */
+#include "wifi_config.h"
 #include "ssd1306.h"
 
 /* ─── logging tag ──────────────────────────────────────────────── */
 #define TAG "VOICE_CLIENT"
 
-/* ─── I2S pin configuration ─────────────────────────────────────── */
+/* ─── I2S mic pins (INMP441) ────────────────────────────────────── */
 #define I2S_WS_IO    GPIO_NUM_4
 #define I2S_SCK_IO   GPIO_NUM_5
 #define I2S_SD_IO    GPIO_NUM_6
 
+/* ─── I2S speaker pins (MAX98357A) ──────────────────────────────── */
+#define I2S_TX_BCLK  GPIO_NUM_15
+#define I2S_TX_WS    GPIO_NUM_16
+#define I2S_TX_DO    GPIO_NUM_7
+
 /* ─── audio parameters ───────────────────────────────────────────── */
 #define SAMPLE_RATE      16000
-#define CHUNK_SAMPLES    512          /* 32 ms per chunk @ 16 kHz */
-#define CHUNK_BYTES      (CHUNK_SAMPLES * 2)   /* 16-bit = 2 bytes/sample */
-/* STEREO 32-bit: 2 channels × 4 bytes = 8 bytes per frame-pair */
-#define I2S_RAW_BYTES    (CHUNK_SAMPLES * 8)   /* stereo 32-bit raw */
+#define CHUNK_SAMPLES    512
+#define CHUNK_BYTES      (CHUNK_SAMPLES * 2)
+#define I2S_RAW_BYTES    (CHUNK_SAMPLES * 8)
+#define TTS_SAMPLE_RATE  32000           /* TTS WAV output rate */
+#define TTS_URL_MAX_LEN  256
+#define TTS_BUF_MAX      (512 * 1024)    /* 512 KB max TTS audio in PSRAM */
 
 /* ─── display ────────────────────────────────────────────────────── */
 #define DISP_SDA  GPIO_NUM_41
@@ -56,12 +69,15 @@ static EventGroupHandle_t s_wifi_eg;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
-static esp_websocket_client_handle_t s_ws_client = NULL;
+static esp_websocket_client_handle_t s_ws_client       = NULL;
+static i2s_chan_handle_t             s_tx_handle        = NULL;
+static QueueHandle_t                 s_tts_url_queue    = NULL;
 static volatile bool  s_ws_connected   = false;
+static volatile bool  s_tts_playing    = false;
 static volatile int   s_recog_count    = 0;
-static char           s_last_text[128] = "";
-static char           s_last_speaker[64] = "";
-static char           s_last_speaker_score[32] = "";  /* "Spk:0.54" ASCII for OLED */
+static char           s_last_text[128]         = "";
+static char           s_last_speaker[64]       = "";
+static char           s_last_speaker_score[32] = "";
 
 /* ─── display helpers ─────────────────────────────────────────────── */
 
@@ -90,14 +106,129 @@ static void disp_update(void) {
     int nchar = utf8_charcount(s_last_text);
     ssd1306_printf(0, 2, "N:%-4d Len:%-4d", s_recog_count, nchar);
 
-    /* Row 3: speaker match + score (pure ASCII, safe for OLED) */
+    /* Row 3: TTS playing indicator OR speaker match + score */
     int has_spk = (s_last_speaker[0] != '\0');
-    if (has_spk) {
+    if (s_tts_playing) {
+        ssd1306_puts(0, 3, "TTS: Playing... ");
+    } else if (has_spk) {
         ssd1306_printf(0, 3, "Spk:Y %s", s_last_speaker_score);
     } else {
         ssd1306_puts(0, 3, "Spk:N          ");
     }
     ssd1306_flush();
+}
+
+/* ─── WAV header parser ───────────────────────────────────────────── */
+/* Scan the first bytes of a WAV file to find the PCM data chunk offset.
+ * Standard WAV has 44 bytes header, but TTS service adds a LIST chunk → 78 bytes. */
+static int find_wav_data_offset(const uint8_t *buf, int len) {
+    int i = 12;  /* skip RIFF header */
+    while (i < len - 8) {
+        if (buf[i]=='d' && buf[i+1]=='a' && buf[i+2]=='t' && buf[i+3]=='a') {
+            return i + 8;  /* skip 'data' id + size field */
+        }
+        uint32_t chunk_size = (uint32_t)buf[i+4] | ((uint32_t)buf[i+5]<<8)
+                            | ((uint32_t)buf[i+6]<<16) | ((uint32_t)buf[i+7]<<24);
+        i += 8 + (int)(chunk_size & ~1u);  /* pad to even */
+    }
+    return 44;  /* fallback to standard header */
+}
+
+/* ─── I2S TX (MAX98357A speaker) init ────────────────────────────── */
+static void init_i2s_tx(void) {
+    i2s_chan_config_t tx_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+    tx_cfg.dma_desc_num  = 8;
+    tx_cfg.dma_frame_num = 512;
+    ESP_ERROR_CHECK(i2s_new_channel(&tx_cfg, &s_tx_handle, NULL));
+
+    i2s_std_config_t tx_std = {
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(TTS_SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+                        I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = I2S_TX_BCLK,
+            .ws   = I2S_TX_WS,
+            .dout = I2S_TX_DO,
+            .din  = I2S_GPIO_UNUSED,
+            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
+        },
+    };
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_tx_handle, &tx_std));
+    ESP_ERROR_CHECK(i2s_channel_enable(s_tx_handle));
+    ESP_LOGI(TAG, "✅ I2S TX (MAX98357A) 已初始化 (%d Hz mono)", TTS_SAMPLE_RATE);
+}
+
+/* ─── TTS playback task ──────────────────────────────────────────── */
+static void tts_play_task(void *arg) {
+    char url[TTS_URL_MAX_LEN];
+
+    for (;;) {
+        if (xQueueReceive(s_tts_url_queue, url, portMAX_DELAY) != pdTRUE) continue;
+
+        ESP_LOGI(TAG, "TTS: 开始下载 %s", url);
+        s_tts_playing = true;
+        disp_update();
+
+        /* Use PSRAM for audio buffer (ESP32-S3 N16R8 has 8 MB PSRAM) */
+        uint8_t *audio_buf = heap_caps_malloc(TTS_BUF_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!audio_buf) {
+            /* Fallback to internal RAM with smaller buffer */
+            audio_buf = malloc(64 * 1024);
+        }
+        if (!audio_buf) {
+            ESP_LOGE(TAG, "TTS: 内存不足");
+            s_tts_playing = false;
+            disp_update();
+            continue;
+        }
+
+        esp_http_client_config_t cfg = {
+            .url        = url,
+            .timeout_ms = 15000,
+        };
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        esp_err_t err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "TTS: HTTP open 失败: %d", err);
+            free(audio_buf);
+            esp_http_client_cleanup(client);
+            s_tts_playing = false;
+            disp_update();
+            continue;
+        }
+
+        esp_http_client_fetch_headers(client);
+
+        int total = 0;
+        int max_bytes = TTS_BUF_MAX;
+        int n;
+        while ((n = esp_http_client_read(client, (char *)audio_buf + total,
+                                         MIN(1024, max_bytes - total))) > 0) {
+            total += n;
+            if (total >= max_bytes) break;
+        }
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        ESP_LOGI(TAG, "TTS: 下载完成 %d 字节", total);
+
+        if (total > 80) {
+            /* Skip WAV header to reach raw PCM data */
+            int data_offset = find_wav_data_offset(audio_buf, MIN(total, 256));
+            int pcm_len = total - data_offset;
+            if (pcm_len > 0) {
+                size_t written;
+                i2s_channel_write(s_tx_handle, audio_buf + data_offset, pcm_len,
+                                  &written, pdMS_TO_TICKS(30000));
+                ESP_LOGI(TAG, "TTS: 播放完成 (%d/%d 字节写入 I2S)", (int)written, pcm_len);
+            }
+        }
+
+        free(audio_buf);
+        s_tts_playing = false;
+        disp_update();
+    }
+    vTaskDelete(NULL);
 }
 
 /* ─── WebSocket event handler ─────────────────────────────────────── */
@@ -135,6 +266,26 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
                     cJSON *speaker = cJSON_GetObjectItem(root, "speaker");
                     cJSON *spk_id  = speaker ? cJSON_GetObjectItem(speaker, "id") : NULL;
                     cJSON *score   = speaker ? cJSON_GetObjectItem(speaker, "score") : NULL;
+                    cJSON *type    = cJSON_GetObjectItem(root, "type");
+
+                    /* TTS playback command from LLM service */
+                    if (type && cJSON_IsString(type) &&
+                        strcmp(type->valuestring, "tts_url") == 0) {
+                        cJSON *url = cJSON_GetObjectItem(root, "url");
+                        if (url && cJSON_IsString(url)) {
+                            char url_buf[TTS_URL_MAX_LEN];
+                            strncpy(url_buf, url->valuestring, sizeof(url_buf) - 1);
+                            url_buf[sizeof(url_buf) - 1] = '\0';
+                            if (xQueueSend(s_tts_url_queue, url_buf, 0) == pdTRUE) {
+                                ESP_LOGI(TAG, "TTS URL 入队: %s", url_buf);
+                            } else {
+                                ESP_LOGW(TAG, "TTS 队列满，丢弃");
+                            }
+                        }
+                        cJSON_Delete(root);
+                        free(json_str);
+                        break;
+                    }
 
                     if (text && cJSON_IsString(text)) {
                         strncpy(s_last_text, text->valuestring, sizeof(s_last_text) - 1);
@@ -389,6 +540,12 @@ void app_main(void) {
     if (!s_ws_connected) {
         ESP_LOGW(TAG, "WebSocket 未连接，继续启动音频任务（将在连接后发送）");
     }
+
+    /* TTS playback queue + task (pinned to core 0 to avoid I2S contention) */
+    s_tts_url_queue = xQueueCreate(4, TTS_URL_MAX_LEN);
+    assert(s_tts_url_queue);
+    init_i2s_tx();
+    xTaskCreatePinnedToCore(tts_play_task, "tts_play", 12288, NULL, 8, NULL, 0);
 
     /* Audio capture task pinned to core 1 */
     xTaskCreatePinnedToCore(audio_task, "audio", 8192, NULL, 10, NULL, 1);

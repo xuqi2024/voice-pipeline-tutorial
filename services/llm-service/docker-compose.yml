@@ -11,6 +11,12 @@ services:
       - MINIMAX_BASE_URL=https://api.minimaxi.com/anthropic/v1/messages
       - MINIMAX_MODEL=MiniMax-M2.7
       - DASHBOARD_URL=http://dashboard:8080
+      - TTS_SERVICE_URL=http://172.18.0.1:8766
+      - TTS_VOICE_ID=female-shaonv
+      - VAD_SERVICE_URL=http://vad-service:8767
+      - HOST_IP=192.168.1.8
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - voice-pipeline
 

@@ -8,4 +8,5 @@ idf_component_register(
         esp_netif
         driver
         json
+        esp_http_client
 )

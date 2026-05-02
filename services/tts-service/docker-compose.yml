@@ -8,16 +8,17 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=8766
-      # 后端选择: edge（免费，默认）或 minimax（需账户余额）
-      - TTS_BACKEND=edge
-      # 默认音色（edge 后端用 zh-CN-*Neural，minimax 后端用 female-*/male-*）
-      - DEFAULT_VOICE=zh-CN-XiaoxiaoNeural
-      # MiniMax 配置（TTS_BACKEND=minimax 时生效）
+      # 后端选择: minimax（Plus 套餐含 Speech 2.8-HD，4000字/日）或 edge（免费备用）
+      - TTS_BACKEND=minimax
+      # 默认音色（minimax 后端用 female-*/male-*）
+      - DEFAULT_VOICE=female-shaonv
+      # MiniMax 配置
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
       - MINIMAX_BASE_URL=https://api.minimaxi.com
-      - MINIMAX_MODEL=speech-01
-      # t2a_pro: 按次计费 | t2a_v2: 流式（需升级计划）
-      - MINIMAX_ENDPOINT=t2a_pro
+      - MINIMAX_MODEL=speech-2.8-hd
+      # t2a_v2: 流式（Plus 套餐支持 speech-2.8-hd）
+      # t2a_pro: 按次计费（speech-01/speech-02，需单独余额）
+      - MINIMAX_ENDPOINT=t2a_v2
       - DEFAULT_SAMPLE_RATE=32000
     networks:
       - voice-pipeline
