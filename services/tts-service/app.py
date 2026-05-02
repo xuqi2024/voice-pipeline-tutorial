@@ -62,19 +62,20 @@ EDGE_VOICES = {
 }
 
 MINIMAX_VOICES = {
-    "female-shaonv":        "少女音（中文，活泼）",
-    "female-yujie":         "御姐音（中文，成熟）",
-    "female-chengshu":      "成熟女声（中文）",
-    "female-tianmei":       "甜美女声（中文）",
-    "male-qn-qingse":       "青涩青年（中文）",
-    "male-qn-jingying":     "精英青年（中文）",
-    "male-qn-badao":        "霸道青年（中文）",
-    "presenter_male":       "男性主播（中文）",
-    "presenter_female":     "女性主播（中文）",
-    "audiobook_male_1":     "有声书男声1",
-    "audiobook_female_1":   "有声书女声1",
-    "female-en-lilyrose":   "Lily Rose（英文）",
-    "male-en-Boston":       "Boston（英文）",
+    # 中文音色（均经 speech-2.8-hd 验证）
+    "female-shaonv":          "少女音（中文，活泼）",
+    "female-yujie":           "御姐音（中文，成熟）",
+    "female-chengshu":        "成熟女声（中文）",
+    "female-tianmei":         "甜美女声（中文）",
+    "male-qn-qingse":         "青涩青年（中文）",
+    "male-qn-jingying":       "精英青年（中文）",
+    "male-qn-badao":          "霸道青年（中文）",
+    "presenter_male":         "男性主播（中文）",
+    "presenter_female":       "女性主播（中文）",
+    "audiobook_male_1":       "有声书男声1",
+    "audiobook_female_1":     "有声书女声1",
+    # 英文音色（speech-2.8-hd 支持）
+    "English_Trustworth_Man": "Trustworthy Man（英文男声）",
 }
 
 
@@ -226,15 +227,40 @@ async def minimax_tts_v2_stream(
             if resp.status_code != 200:
                 body = await resp.aread()
                 raise HTTPException(status_code=resp.status_code, detail=f"MiniMax API error: {body[:200]}")
+            first_line = True
             async for line in resp.aiter_lines():
                 line = line.strip()
-                if not line or not line.startswith("data:"):
+                if not line:
+                    continue
+                # 首行若是非 SSE 的 JSON 错误（如 voice id not exist），立即抛异常
+                if first_line and not line.startswith("data:"):
+                    first_line = False
+                    try:
+                        err = json.loads(line)
+                        base = err.get("base_resp", {})
+                        if base.get("status_code", 0) != 0:
+                            raise HTTPException(
+                                status_code=502,
+                                detail=f"MiniMax API 错误: {base.get('status_msg', line[:200])}"
+                            )
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    continue
+                first_line = False
+                if not line.startswith("data:"):
                     continue
                 raw = line[5:].strip()
                 if raw == "[DONE]":
                     break
                 try:
                     chunk = json.loads(raw)
+                    # 检查内嵌的 base_resp 错误（某些流式响应会附带）
+                    base = chunk.get("base_resp", {})
+                    if base.get("status_code", 0) != 0:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"MiniMax API 错误: {base.get('status_msg')}"
+                        )
                     hex_audio = chunk.get("data", {}).get("audio", "")
                     if hex_audio:
                         yield bytes.fromhex(hex_audio)
@@ -248,7 +274,11 @@ async def minimax_synthesize(text: str, voice_id: str, speed: float, volume: flo
         chunks = []
         async for c in minimax_tts_v2_stream(text, voice_id, speed, volume, pitch, fmt, sample_rate):
             chunks.append(c)
-        return b"".join(chunks)
+        result = b"".join(chunks)
+        if not result:
+            raise HTTPException(status_code=502,
+                detail=f"MiniMax 返回空音频（voice_id '{voice_id}' 可能不受 {MINIMAX_MODEL} 支持）")
+        return result
     return await minimax_tts_pro(text, voice_id, speed, volume, pitch, fmt, sample_rate)
 
 
@@ -321,16 +351,26 @@ async def openai_speech(req: OpenAISpeechRequest):
 
 @app.post("/tts")
 async def tts_endpoint(req: TTSRequest):
-    """原生接口：POST /tts，支持流式（edge 后端）和非流式"""
+    """原生接口：POST /tts，支持流式和非流式"""
     fmt = req.format if req.format in MIME_TYPES else "mp3"
 
-    if req.stream and TTS_BACKEND == "edge":
-        rate = _speed_to_edge_rate(req.speed)
-        return StreamingResponse(
-            edge_tts_stream(req.text, req.voice_id, rate=rate),
-            media_type="audio/mpeg",
-            headers={"X-Voice-ID": req.voice_id, "X-Backend": "edge"},
-        )
+    if req.stream:
+        if TTS_BACKEND == "edge":
+            rate = _speed_to_edge_rate(req.speed)
+            return StreamingResponse(
+                edge_tts_stream(req.text, req.voice_id, rate=rate),
+                media_type="audio/mpeg",
+                headers={"X-Voice-ID": req.voice_id, "X-Backend": "edge"},
+            )
+        elif TTS_BACKEND == "minimax" and MINIMAX_ENDPOINT == "t2a_v2":
+            return StreamingResponse(
+                minimax_tts_v2_stream(
+                    req.text, req.voice_id, req.speed, req.volume,
+                    req.pitch, fmt, req.sample_rate,
+                ),
+                media_type=MIME_TYPES.get(fmt, "audio/mpeg"),
+                headers={"X-Voice-ID": req.voice_id, "X-Backend": "minimax"},
+            )
 
     audio = await synthesize(
         text=req.text, voice_id=req.voice_id, speed=req.speed,
