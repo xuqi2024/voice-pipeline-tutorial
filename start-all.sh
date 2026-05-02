@@ -99,6 +99,31 @@ sleep 5
 ok "VAD 服务已启动（端口 8765 开放）"
 
 echo ""
+# 7. 启动 TTS 服务
+info "启动 TTS 服务（MiniMax 后端）..."
+cd "$PROJECT_DIR/services/tts-service"
+if [ ! -f .env ]; then
+    echo -e "\033[1;31m[ERROR]\033[0m tts-service/.env 不存在，请先复制并填写:"
+    echo "  cp services/tts-service/.env.example services/tts-service/.env"
+    echo "  然后填入 MINIMAX_API_KEY"
+    exit 1
+fi
+docker compose up -d --build
+ok "TTS 服务已启动（端口 8766）"
+
+# 等待 TTS 就绪
+ELAPSED=0
+while ! curl -sf http://localhost:8766/health > /dev/null 2>&1; do
+    sleep 3
+    ELAPSED=$((ELAPSED + 3))
+    if [ $ELAPSED -ge 60 ]; then
+        echo -e "\033[1;33m[WARN]\033[0m TTS 服务启动超时，请检查: docker logs tts-service --tail 20"
+        break
+    fi
+done
+ok "TTS 服务已就绪（端口 8766 开放）"
+
+echo ""
 echo "══════════════════════════════════════════════"
 echo ""
 ok "所有服务已启动！运行验证测试："
@@ -106,6 +131,6 @@ echo ""
 echo "  bash tests/run_all_tests.sh"
 echo ""
 echo "服务状态："
-docker ps --format "  {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "funasr|voiceprint|vad" || true
+docker ps --format "  {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "funasr|voiceprint|vad|tts" || true
 echo ""
 echo "══════════════════════════════════════════════"

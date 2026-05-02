@@ -1,0 +1,32 @@
+services:
+  tts-service:
+    build: .
+    container_name: tts-service
+    restart: unless-stopped
+    ports:
+      - "8766:8766"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8766
+      # MiniMax API Key（必填，通过 .env 注入）
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - MINIMAX_BASE_URL=https://api.minimaxi.com
+      - MINIMAX_MODEL=speech-01
+      # t2a_pro: 按次计费（当前账号支持）
+      # t2a_v2: 流式（需升级至 Turbo/HD 计划）
+      - MINIMAX_ENDPOINT=t2a_pro
+      # 默认音色（可选）
+      - DEFAULT_VOICE=female-shaonv
+      - DEFAULT_SAMPLE_RATE=32000
+    networks:
+      - voice-pipeline
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8766/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  voice-pipeline:
+    external: true
+    name: voice-pipeline
