@@ -68,6 +68,7 @@
   .tag-vp { background: rgba(188,140,255,.15); color: var(--purple); }
   .tag-sys { background: rgba(139,148,158,.15); color: var(--muted); }
   .tag-reg { background: rgba(255,166,87,.15); color: var(--orange); }
+  .tag-llm { background: rgba(57,211,83,.15); color: var(--cyan); }
   .log-text { word-break: break-all; }
   .log-text .highlight { color: var(--yellow); font-weight: 600; }
   .log-text .speaker { color: var(--purple); font-weight: 600; }
@@ -115,9 +116,11 @@
   .llm-panel { border-top: 1px solid var(--border); background: var(--bg2); }
   .llm-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
   .llm-header h2 { font-size: 13px; font-weight: 600; }
-  .llm-body { padding: 16px; font-size: 12px; line-height: 1.7; }
-  .llm-body pre { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-family: 'Cascadia Code','Fira Code',monospace; font-size: 11px; white-space: pre; }
-  .llm-body h3 { font-size: 12px; color: var(--blue); margin: 12px 0 6px; }
+  .llm-body { padding: 14px 16px; }
+  .llm-reply-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 8px; min-height: 48px; }
+  .llm-reply-text { font-size: 14px; color: var(--cyan); line-height: 1.6; word-break: break-all; }
+  .llm-reply-meta { font-size: 10px; color: var(--muted); margin-top: 6px; }
+  .llm-thinking { color: var(--muted); font-style: italic; animation: pulse 1s infinite; }
   .llm-body p { color: var(--muted); margin-bottom: 8px; }
   .llm-body .tip { background: rgba(88,166,255,.08); border-left: 3px solid var(--blue); padding: 8px 10px; border-radius: 0 6px 6px 0; margin: 8px 0; }
 
@@ -244,60 +247,20 @@
     </div>
   </div>
 
-  <!-- ── LLM Integration Guide ── -->
+  <!-- ── LLM Live Reply ── -->
   <div class="llm-panel">
     <div class="llm-header" onclick="toggleLLM()">
-      <h2>🤖 如何接入 LLM（大语言模型）</h2>
+      <h2>🤖 AI 回复 <span id="llmModelBadge" style="font-size:10px;color:var(--muted);font-weight:400;margin-left:6px">MiniMax M2.7</span></h2>
       <span id="llmArrow">▼</span>
     </div>
     <div class="llm-body" id="llmBody" style="display:none">
-      <p>VAD 服务处理完成后，通过 WebSocket 返回 JSON 结果：</p>
-      <pre>{"text": "今天天气怎么样", "speaker": {"id": "徐琪", "score": 0.87}}</pre>
-
-      <h3>📌 接入步骤</h3>
-      <div class="tip">连接 ws://vad-service:8765，接收识别结果，拼装 Prompt 调用 LLM API。</div>
-
-      <h3>Python 示例（OpenAI 兼容接口）</h3>
-      <pre>import asyncio, json, websockets
-from openai import OpenAI
-
-client = OpenAI(api_key="sk-...",
-                base_url="https://api.openai.com/v1")
-# 国产模型示例：
-# base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"  # 阿里百炼
-# base_url="https://api.deepseek.com/v1"                        # DeepSeek
-
-async def main():
-    async with websockets.connect("ws://localhost:8765") as ws:
-        async for msg in ws:
-            result  = json.loads(msg)
-            text    = result.get("text", "")
-            speaker = (result.get("speaker") or {})
-            name    = speaker.get("id", "用户")
-            if not text:
-                continue
-            resp = client.chat.completions.create(
-                model="gpt-4o",  # 或 qwen-turbo / deepseek-chat
-                messages=[
-                    {"role": "system",
-                     "content": "你是智能语音助手，根据说话人身份个性化回复。"},
-                    {"role": "user",
-                     "content": f"用户[{name}]说：{text}"},
-                ]
-            )
-            print("LLM:", resp.choices[0].message.content)
-
-asyncio.run(main())</pre>
-
-      <h3>🔑 关键字段</h3>
-      <pre>result["text"]              # 识别文本
-result["speaker"]["id"]     # 说话人姓名（声纹匹配）
-result["speaker"]["score"]  # 置信度 0~1（&gt;0.5 可信）</pre>
-
-      <h3>📦 推荐国内模型</h3>
-      <pre>阿里百炼  dashscope.aliyuncs.com  qwen-turbo / qwen-max
-DeepSeek  api.deepseek.com         deepseek-chat
-本地      localhost:11434/v1       llama3 / qwen2.5 (Ollama)</pre>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+        语音识别完成后自动调用 LLM，回复显示在下方
+      </div>
+      <div class="llm-reply-box">
+        <div class="llm-reply-text" id="llmReplyText" style="color:var(--muted)">等待语音输入...</div>
+        <div class="llm-reply-meta" id="llmReplyMeta"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -413,6 +376,25 @@ function handleEvent(ev) {
       ['mic','vad','asr','vp'].forEach(n => setNode(n, ''));
     }, 3000);
 
+  } else if (t === 'llm_thinking') {
+    addLog('llm', `${dev}⏳ <span class="llm-thinking">AI 思考中… "${esc(ev.text)}"</span>`);
+    document.getElementById('llmReplyText').innerHTML = '<span class="llm-thinking">AI 思考中…</span>';
+    document.getElementById('llmReplyMeta').textContent = '';
+    // auto-expand LLM panel
+    const body = document.getElementById('llmBody');
+    if (body.style.display === 'none') {
+      body.style.display = ''; document.getElementById('llmArrow').textContent = '▲';
+    }
+
+  } else if (t === 'llm_response') {
+    const spkLabel = ev.speaker && ev.speaker !== 'unknown' ? ` [${esc(ev.speaker)}]` : '';
+    addLog('llm', `${dev}🤖${spkLabel} <span style="color:var(--cyan)">${esc(ev.reply)}</span>`);
+    document.getElementById('llmReplyText').textContent = ev.reply;
+    document.getElementById('llmReplyText').style.color = 'var(--cyan)';
+    const now = new Date().toTimeString().slice(0,8);
+    document.getElementById('llmReplyMeta').textContent =
+      `${now} | 说话人: ${ev.speaker || '未知'} | 设备: ${ev.device || '-'}`;
+
   } else if (t === 'speaker_registered') {
     addLog('reg', `✅ 声纹注册：<span class="speaker">${esc(ev.speaker_id)}</span>`);
     fetchHealth();
@@ -432,8 +414,8 @@ function addLog(tag, html) {
   row.className = 'log-row';
   const now = new Date();
   const ts = now.toTimeString().slice(0,8);
-  const tagMap = { vad:'tag-vad', asr:'tag-asr', vp:'tag-vp', sys:'tag-sys', reg:'tag-reg' };
-  const tagLabel = { vad:'VAD', asr:'ASR', vp:'声纹', sys:'系统', reg:'注册' };
+  const tagMap = { vad:'tag-vad', asr:'tag-asr', vp:'tag-vp', sys:'tag-sys', reg:'tag-reg', llm:'tag-llm' };
+  const tagLabel = { vad:'VAD', asr:'ASR', vp:'声纹', sys:'系统', reg:'注册', llm:'LLM' };
   row.innerHTML = `<span class="log-time">${ts}</span><span class="log-tag ${tagMap[tag]||'tag-sys'}">${tagLabel[tag]||tag}</span><span class="log-text">${html}</span>`;
   lb.appendChild(row);
   lb.scrollTop = lb.scrollHeight;

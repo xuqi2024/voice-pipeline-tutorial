@@ -48,6 +48,7 @@ FUNASR_WS_URL = os.getenv("FUNASR_WS_URL", "ws://funasr:10095")
 VOICEPRINT_API_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005")
 VOICEPRINT_API_KEY = os.getenv("VOICEPRINT_API_KEY", "de395e06-035c-44f9-9a6b-8ef126a8bea0")
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "")  # 留空则不推送
+LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "")  # 留空则不调用 LLM
 
 MIN_SILENCE_CHUNKS = int(MIN_SILENCE_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 MIN_SPEECH_CHUNKS = int(MIN_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
@@ -75,6 +76,20 @@ async def push_event(event: dict):
             await client.post(f"{DASHBOARD_URL}/api/vad-event", json=event)
     except Exception:
         pass  # dashboard 不可用时静默忽略
+
+
+async def call_llm(text: str, speaker: str, device: str):
+    """调用 LLM 服务生成回复（fire-and-forget）"""
+    if not LLM_SERVICE_URL or not text:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            await client.post(
+                f"{LLM_SERVICE_URL}/api/chat",
+                json={"text": text, "speaker": speaker, "device": device},
+            )
+    except Exception as e:
+        logger.warning(f"LLM service call failed: {e}")
 
 
 async def recognize_with_funasr(wav_bytes: bytes) -> Optional[str]:
@@ -246,6 +261,14 @@ async def handle_client(websocket):
                                 "device": device_id,
                             }))
                             await websocket.send(json.dumps(result, ensure_ascii=False))
+
+                            # 调用 LLM 生成智能回复（有 ASR 文字时）
+                            if text:
+                                asyncio.create_task(call_llm(
+                                    text,
+                                    speaker["id"] if speaker else "unknown",
+                                    device_id,
+                                ))
                         else:
                             logger.debug("语音片段太短，忽略")
 

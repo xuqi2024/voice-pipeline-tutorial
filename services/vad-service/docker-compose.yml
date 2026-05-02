@@ -17,6 +17,7 @@ services:
       - VOICEPRINT_API_URL=http://voiceprint-api:8005
       - VOICEPRINT_API_KEY=de395e06-035c-44f9-9a6b-8ef126a8bea0
       - DASHBOARD_URL=http://dashboard:8080
+      - LLM_SERVICE_URL=http://llm-service:8006
     networks:
       - voice-pipeline
     healthcheck:
