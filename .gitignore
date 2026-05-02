@@ -5,3 +5,10 @@ __pycache__/
 .env
 *.log
 /tmp/
+
+# ESP32 secrets and build artifacts
+services/esp32-client/main/wifi_config.h
+services/esp32-client/build/
+services/esp32-client/sdkconfig
+services/esp32-client/managed_components/
+services/esp32-client/dependencies.lock

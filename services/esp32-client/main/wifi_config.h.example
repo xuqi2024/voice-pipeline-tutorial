@@ -1,0 +1,6 @@
+# WiFi 配置 (不提交到 Git)
+# 复制此文件为 wifi_config.h 并填入实际信息
+#pragma once
+#define WIFI_SSID  "YOUR_WIFI_SSID"
+#define WIFI_PASS  "YOUR_WIFI_PASSWORD"
+#define VAD_WS_URL "ws://192.168.1.8:8765"

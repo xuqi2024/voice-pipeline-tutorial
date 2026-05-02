@@ -37,10 +37,10 @@ services:
     networks:
       - voice-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "cat /dev/null > /dev/tcp/localhost/10095 && echo ok || exit 1"]
+      test: ["CMD-SHELL", "curl -s --max-time 3 http://localhost:10095/ || exit 0"]
       interval: 30s
       timeout: 10s
-      retries: 10
+      retries: 3
       start_period: 120s
 
 volumes:
