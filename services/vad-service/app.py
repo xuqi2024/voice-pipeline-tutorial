@@ -258,8 +258,8 @@ async def handle_client(websocket):
     # 注册设备 WebSocket（覆盖旧连接，新连接优先）
     _connected_devices[device_id] = websocket
 
-    # 若 60s 内有 TTS 未播放，立即推送给新连接的设备
-    if _last_tts and (time.time() - _last_tts.get("ts", 0) < 60):
+    # 若 5 分钟内有 TTS 未播放，立即推送给新连接的设备
+    if _last_tts and (time.time() - _last_tts.get("ts", 0) < 300):
         try:
             await websocket.send(json.dumps({
                 "type": "tts_url",
