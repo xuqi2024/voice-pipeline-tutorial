@@ -194,13 +194,16 @@ class VoiceprintService:
             logger.error(f"相似度计算失败: {e}")
             return 0.0
 
-    def register_voiceprint(self, speaker_id: str, audio_bytes: bytes) -> bool:
+    def register_voiceprint(
+        self, speaker_id: str, audio_bytes: bytes, accumulate: bool = False
+    ) -> bool:
         """
         注册声纹
 
         Args:
             speaker_id: 说话人ID
             audio_bytes: 音频字节数据
+            accumulate: True = 累积平均（多样本提高精度），False = 覆盖重置
 
         Returns:
             bool: 注册是否成功
@@ -218,11 +221,12 @@ class VoiceprintService:
             # 提取声纹特征
             emb = self.extract_voiceprint(audio_path)
 
-            # 保存到数据库
-            success = voiceprint_db.save_voiceprint(speaker_id, emb)
+            # 保存到数据库（支持累积平均）
+            success = voiceprint_db.save_voiceprint(speaker_id, emb, accumulate=accumulate)
 
             if success:
-                logger.info(f"声纹注册成功: {speaker_id}")
+                mode = "累积" if accumulate else "覆盖"
+                logger.info(f"声纹注册成功({mode}): {speaker_id}")
             else:
                 logger.error(f"声纹注册失败: {speaker_id}")
 

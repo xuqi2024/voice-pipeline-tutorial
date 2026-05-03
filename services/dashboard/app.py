@@ -134,19 +134,35 @@ async def speakers_health():
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.get("/api/speakers/")
+async def list_speakers():
+    """列出所有已注册说话人（含样本数）"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{VOICEPRINT_URL}/voiceprint/speakers",
+                headers=_vp_headers(),
+            )
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.post("/api/speakers/register")
 async def register_speaker(
     speaker_id: str = Form(..., description="说话人ID/姓名"),
     file: UploadFile = File(..., description="WAV 音频文件 (16kHz mono 推荐)"),
+    accumulate: str = Form("false", description="true=追加样本累积，false=覆盖重置"),
 ):
-    """注册新声纹"""
+    """注册声纹（支持多样本累积平均提高准确率）"""
     audio_bytes = await file.read()
+    acc = accumulate.lower() in ("true", "1", "yes")
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
             f"{VOICEPRINT_URL}/voiceprint/register",
             headers=_vp_headers(),
             files={"file": (file.filename or "audio.wav", audio_bytes, "audio/wav")},
-            data={"speaker_id": speaker_id},
+            data={"speaker_id": speaker_id, "accumulate": str(acc).lower()},
         )
     result = resp.json()
     if resp.status_code == 200:
@@ -154,8 +170,9 @@ async def register_speaker(
             "type": "speaker_registered",
             "speaker_id": speaker_id,
             "msg": result.get("msg", ""),
+            "accumulate": acc,
         })
-        logger.info(f"注册声纹: {speaker_id}")
+        logger.info(f"注册声纹({'累积' if acc else '覆盖'}): {speaker_id}")
     return JSONResponse(result, status_code=resp.status_code)
 
 
@@ -175,6 +192,7 @@ async def delete_speaker(speaker_id: str):
         })
         logger.info(f"删除声纹: {speaker_id}")
     return JSONResponse(result, status_code=resp.status_code)
+
 
 
 # ──────────────────────────── 系统状态 ───────────────────────

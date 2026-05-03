@@ -127,6 +127,19 @@
   /* ── Speaker count badge ── */
   .spk-count { background: var(--bg3); border-radius: 12px; padding: 2px 8px; font-size: 11px; color: var(--muted); }
 
+  /* ── Speaker management table ── */
+  .spk-row { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); }
+  .spk-row:last-child { border-bottom:none; }
+  .spk-name { flex:1; font-size:13px; font-weight:600; color:var(--text); }
+  .spk-meta { font-size:11px; color:var(--muted); }
+  .spk-badge { background:rgba(88,166,255,.15); color:var(--blue); border-radius:10px; padding:1px 7px; font-size:10px; font-weight:600; }
+  .spk-btn { padding:4px 10px; border-radius:6px; border:1px solid; font-size:11px; cursor:pointer; transition:all .15s; }
+  .spk-btn.add { border-color:var(--green); color:var(--green); background:rgba(63,185,80,.08); }
+  .spk-btn.add:hover { background:rgba(63,185,80,.2); }
+  .spk-btn.del { border-color:var(--red); color:var(--red); background:rgba(248,81,73,.08); }
+  .spk-btn.del:hover { background:rgba(248,81,73,.2); }
+  .spk-empty { font-size:12px; color:var(--muted); padding:16px; text-align:center; }
+
   /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 </style>
@@ -248,8 +261,30 @@
         </div>
       </div>
 
+      <div style="grid-column:span 2;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)">
+        <input type="checkbox" id="accumulateCheck" style="width:auto;cursor:pointer" />
+        <label for="accumulateCheck" style="cursor:pointer;font-size:12px;color:var(--text)">
+          ➕ 追加样本（累积平均，提高精度）— 不勾选则重新覆盖注册
+        </label>
+      </div>
+
       <button class="submit-btn" id="submitBtn" onclick="doRegister()" disabled>注册声纹</button>
       <div class="reg-result" id="regResult"></div>
+    </div>
+  </div>
+
+  <!-- ── Speaker Management ── -->
+  <div class="register-panel" id="mgmtPanel">
+    <div class="register-header" onclick="toggleMgmt()">
+      <h2>👥 已注册说话人</h2>
+      <span id="mgmtArrow">▼</span>
+    </div>
+    <div id="mgmtBody" style="display:none">
+      <div style="padding:8px 16px 0;display:flex;gap:8px;align-items:center">
+        <button onclick="loadSpeakers()" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);cursor:pointer">🔄 刷新</button>
+        <span id="speakerListStatus" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div id="speakerList" style="padding:8px 16px 16px"></div>
     </div>
   </div>
 
@@ -610,11 +645,14 @@ async function doRegister() {
   if (!audio) return;
 
   const btn = document.getElementById('submitBtn');
-  btn.disabled = true; btn.textContent = '注册中...';
+  const accumulate = document.getElementById('accumulateCheck').checked;
+  btn.disabled = true;
+  btn.textContent = accumulate ? '追加样本中...' : '注册中...';
 
   const fd = new FormData();
   fd.append('speaker_id', speakerId);
   fd.append('file', audio, 'audio.wav');
+  fd.append('accumulate', accumulate ? 'true' : 'false');
 
   try {
     const resp = await fetch('/api/speakers/register', { method: 'POST', body: fd });
@@ -630,6 +668,7 @@ async function doRegister() {
       document.getElementById('recordBtn').className = 'record-btn';
       document.getElementById('recordIcon').textContent = '🎙️';
       document.getElementById('recordLabel').textContent = '点击开始录音（5秒）';
+      loadSpeakers();
     } else {
       resultEl.className = 'reg-result err';
       resultEl.textContent = `❌ ${data.detail || data.msg || '注册失败'}`;
@@ -652,6 +691,64 @@ function toggleRegister() {
   registerOpen = !registerOpen;
   document.getElementById('registerBody').style.display = registerOpen ? '' : 'none';
   document.getElementById('toggleArrow').textContent = registerOpen ? '▲' : '▼';
+}
+
+let mgmtOpen = false;
+function toggleMgmt() {
+  mgmtOpen = !mgmtOpen;
+  document.getElementById('mgmtBody').style.display = mgmtOpen ? '' : 'none';
+  document.getElementById('mgmtArrow').textContent = mgmtOpen ? '▲' : '▼';
+  if (mgmtOpen) loadSpeakers();
+}
+
+async function loadSpeakers() {
+  const status = document.getElementById('speakerListStatus');
+  const list = document.getElementById('speakerList');
+  status.textContent = '加载中…';
+  try {
+    const resp = await fetch('/api/speakers/');
+    const data = await resp.json();
+    const speakers = data.speakers || [];
+    status.textContent = `共 ${speakers.length} 人`;
+    if (speakers.length === 0) {
+      list.innerHTML = '<div class="spk-empty">暂无已注册说话人</div>';
+      return;
+    }
+    list.innerHTML = speakers.map(sp => {
+      const name = esc(sp.speaker_id || sp.id || '?');
+      const cnt = sp.sample_count || 1;
+      const upd = sp.updated_at ? new Date(sp.updated_at).toLocaleString('zh-CN') : '';
+      return `<div class="spk-row">
+        <span class="spk-name">${name}</span>
+        <span class="spk-badge">${cnt} 样本</span>
+        ${upd ? `<span class="spk-meta">${upd}</span>` : ''}
+        <button class="spk-btn add" onclick="addSample('${name}')">＋样本</button>
+        <button class="spk-btn del" onclick="deleteSpeaker('${name}')">🗑 删除</button>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    status.textContent = '加载失败';
+    list.innerHTML = `<div class="spk-empty" style="color:var(--red)">错误: ${esc(e.message)}</div>`;
+  }
+}
+
+async function deleteSpeaker(id) {
+  if (!confirm(`确定删除说话人 "${id}" 的声纹吗？`)) return;
+  try {
+    const resp = await fetch(`/api/speakers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (resp.ok) { alert(`✅ ${data.msg || '已删除'}`); loadSpeakers(); }
+    else alert(`❌ ${data.detail || '删除失败'}`);
+  } catch (e) { alert(`❌ 请求失败: ${e.message}`); }
+}
+
+function addSample(id) {
+  document.getElementById('speakerId').value = id;
+  document.getElementById('accumulateCheck').checked = true;
+  // scroll to register panel
+  document.querySelector('.register-panel').scrollIntoView({ behavior: 'smooth' });
+  if (!registerOpen) toggleRegister();
+  document.getElementById('speakerId').focus();
 }
 
 let llmOpen = false;
