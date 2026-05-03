@@ -59,11 +59,50 @@ MAX_SPEECH_CHUNKS = int(MAX_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 # 已连接的 WebSocket 设备注册表 { device_id: websocket }
 _connected_devices: dict = {}
 
-# 最近一次 TTS URL，用于新设备连接时立即推送（60s 有效）
-_last_tts: dict = {}  # {"url": str, "ts": float}
+# 最近一次 TTS 信息，用于：
+#   1. 新设备连接时立即补发（60s 有效）
+#   2. 文本相似度回声检测
+_last_tts: dict = {}  # {"url", "ts", "text", "duration"}
 
-# 已弃用：TTS 时间抑制（改用声纹过滤，不再需要）
+# 已弃用：TTS 时间抑制（改用文本相似度+时间窗口过滤）
 _suppress_until: float = 0.0
+
+
+def is_tts_echo(asr_text: str) -> bool:
+    """
+    判断 ASR 结果是否是 TTS 播放的回声。
+    条件：① 识别时间在 TTS 播放窗口内  ② 文本与 TTS 高度相似或为子串。
+    即使声纹识别匹配了注册用户，也可能被回声误判，此函数作为最后一层保护。
+    """
+    if not _last_tts or not asr_text:
+        return False
+    tts_text: str = _last_tts.get("text", "")
+    if not tts_text:
+        return False
+
+    # 时间窗口：从 TTS 开始播放到结束后 4s（麦克风拾音延迟余量）
+    tts_start   = _last_tts.get("ts", 0)
+    tts_duration = _last_tts.get("duration", 0)
+    tts_end     = tts_start + tts_duration + 4.0
+    now = time.time()
+
+    if now > tts_end:
+        return False  # 时间窗口已过，不是回声
+
+    # 文本相似度：SequenceMatcher 字符级别
+    from difflib import SequenceMatcher
+    ratio = SequenceMatcher(None, asr_text, tts_text).ratio()
+
+    # 子串包含（部分识别 TTS 内容）
+    is_sub = asr_text in tts_text or tts_text in asr_text
+
+    echo = ratio >= 0.5 or is_sub
+    if echo:
+        logger.info(
+            f"[回声过滤] ASR={asr_text!r} 与 TTS={tts_text[:30]!r}... "
+            f"相似度={ratio:.2f} 子串={is_sub}，判定为 TTS 回声，跳过 LLM"
+        )
+    return echo
 
 
 def build_wav_bytes(pcm_chunks: list[bytes]) -> bytes:
@@ -289,13 +328,16 @@ async def handle_client(websocket):
                             await websocket.send(json.dumps(result, ensure_ascii=False))
 
                             # 调用 LLM 生成智能回复
-                            # 只有声纹识别到的注册用户才进入 LLM（TTS 播放的合成音不是注册用户，天然过滤）
+                            # 双重过滤：① 声纹必须匹配注册用户 ② 文本不得是 TTS 回声
                             if text and speaker and speaker.get("id"):
-                                asyncio.create_task(call_llm(
-                                    text,
-                                    speaker["id"],
-                                    device_id,
-                                ))
+                                if is_tts_echo(text):
+                                    pass  # 回声已在 is_tts_echo 中记录日志
+                                else:
+                                    asyncio.create_task(call_llm(
+                                        text,
+                                        speaker["id"],
+                                        device_id,
+                                    ))
                         else:
                             logger.debug("语音片段太短，忽略")
 
@@ -360,9 +402,14 @@ async def _http_forward_handler(reader: asyncio.StreamReader, writer: asyncio.St
                 device  = data.get("device", "")
                 message = data.get("message", {})
 
-                # 缓存 tts_url 消息（供新连接设备补发）
+                # 缓存 tts_url 消息（供新连接设备补发 + 回声检测）
                 if message.get("type") == "tts_url" and message.get("url"):
-                    _last_tts = {"url": message["url"], "ts": time.time()}
+                    _last_tts = {
+                        "url":      message["url"],
+                        "ts":       time.time(),
+                        "text":     message.get("text", ""),      # TTS 原文
+                        "duration": float(message.get("duration", 0)),
+                    }
 
                 if device == "*":
                     # 广播给所有已连接设备

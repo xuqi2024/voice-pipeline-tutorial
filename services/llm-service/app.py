@@ -229,10 +229,12 @@ async def chat(body: dict):
 
         logger.info(f"TTS 时长 {tts_duration:.1f}s，广播给所有设备")
 
-        # 广播给所有已连接设备（声纹不匹配时 VAD 自然过滤，不再需要时间抑制）
+        # 广播给所有已连接设备，包含 TTS 文本供 VAD 做回声检测
         asyncio.create_task(forward_to_device("*", {
             "type": "tts_url",
             "url": audio_url,
+            "text": reply,            # 用于文本相似度回声检测
+            "duration": tts_duration, # 用于时间窗口判断
         }))
 
     return {"reply": reply, "speaker": speaker, "device": device}
