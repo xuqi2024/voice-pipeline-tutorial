@@ -221,6 +221,15 @@ static void tts_play_task(void *arg) {
                 i2s_channel_write(s_tx_handle, audio_buf + data_offset, pcm_len,
                                   &written, pdMS_TO_TICKS(30000));
                 ESP_LOGI(TAG, "TTS: 播放完成 (%d/%d 字节写入 I2S)", (int)written, pcm_len);
+
+                /* Flush DMA ring buffers with silence to prevent last PCM block
+                 * from repeating after playback ends.
+                 * Size = dma_desc_num(8) * dma_frame_num(512) * 2 bytes = 8192 bytes.
+                 * Reuse audio_buf (still allocated) — safe because WAV data is done. */
+                memset(audio_buf, 0, 8192);
+                i2s_channel_write(s_tx_handle, audio_buf, 8192,
+                                  &written, pdMS_TO_TICKS(1000));
+                ESP_LOGD(TAG, "TTS: DMA 静音冲洗完成");
             }
         }
 
