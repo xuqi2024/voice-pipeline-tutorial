@@ -67,6 +67,30 @@ _last_tts: dict = {}  # {"url", "ts", "text", "duration"}
 # 已弃用：TTS 时间抑制（改用文本相似度+时间窗口过滤）
 _suppress_until: float = 0.0
 
+# 多麦去重：同一说话人最近一次 LLM 调用 { speaker_id: (timestamp, text) }
+_last_llm_call: dict = {}
+
+
+def is_duplicate_llm(speaker_id: str, text: str) -> bool:
+    """
+    防止多麦（PC-Mic + ESP32 同时拾音）重复触发 LLM。
+    同一说话人在 5s 内出现文本相似度 > 0.6 或子串包含，则视为重复，跳过。
+    """
+    from difflib import SequenceMatcher
+    now = time.time()
+    last_ts, last_text = _last_llm_call.get(speaker_id, (0.0, ""))
+    if now - last_ts < 5.0 and last_text:
+        ratio = SequenceMatcher(None, text, last_text).ratio()
+        is_sub = text in last_text or last_text in text
+        if ratio >= 0.6 or is_sub:
+            logger.info(
+                f"[去重] 跳过重复 LLM 调用: speaker={speaker_id!r} "
+                f"text={text!r} 相似度={ratio:.2f} 距上次={now-last_ts:.1f}s"
+            )
+            return True
+    _last_llm_call[speaker_id] = (now, text)
+    return False
+
 
 def is_tts_echo(asr_text: str) -> bool:
     """
@@ -328,10 +352,12 @@ async def handle_client(websocket):
                             await websocket.send(json.dumps(result, ensure_ascii=False))
 
                             # 调用 LLM 生成智能回复
-                            # 双重过滤：① 声纹必须匹配注册用户 ② 文本不得是 TTS 回声
+                            # 三重过滤：① 声纹匹配注册用户 ② 非 TTS 回声 ③ 多麦去重
                             if text and speaker and speaker.get("id"):
                                 if is_tts_echo(text):
                                     pass  # 回声已在 is_tts_echo 中记录日志
+                                elif is_duplicate_llm(speaker["id"], text):
+                                    pass  # 重复已在 is_duplicate_llm 中记录日志
                                 else:
                                     asyncio.create_task(call_llm(
                                         text,
