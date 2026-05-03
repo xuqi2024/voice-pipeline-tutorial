@@ -212,11 +212,10 @@ async def chat(body: dict):
         audio_id, wav_bytes = tts_result
         audio_url = f"http://{HOST_IP}:8006/api/audio/{audio_id}"
 
-        # 计算 TTS 时长，用于回声抑制（32kHz 16-bit mono）
+        # 计算 TTS 时长（32kHz 16-bit mono），仅供日志参考
         pcm_start = _find_wav_data_offset(wav_bytes)
         pcm_bytes  = len(wav_bytes) - pcm_start
         tts_duration = pcm_bytes / (32000 * 2)  # seconds
-        suppress_sec = tts_duration + 2.0        # extra 2s buffer
 
         # 推送 TTS 就绪事件到 Dashboard（含音频 URL，浏览器直接播放）
         await push_dashboard({
@@ -228,18 +227,9 @@ async def chat(body: dict):
             "audio_id": audio_id,
         })
 
-        # 通知 VAD 服务开启回声抑制（防止喇叭声音被麦克风重新识别）
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                await client.post(
-                    f"{VAD_SERVICE_URL}/api/suppress",
-                    json={"duration": suppress_sec},
-                )
-            logger.info(f"VAD 回声抑制 {suppress_sec:.1f}s")
-        except Exception as e:
-            logger.debug(f"suppress request failed: {e}")
+        logger.info(f"TTS 时长 {tts_duration:.1f}s，广播给所有设备")
 
-        # 广播给所有已连接 ESP32 设备（device="*" 由 VAD 服务处理广播）
+        # 广播给所有已连接设备（声纹不匹配时 VAD 自然过滤，不再需要时间抑制）
         asyncio.create_task(forward_to_device("*", {
             "type": "tts_url",
             "url": audio_url,

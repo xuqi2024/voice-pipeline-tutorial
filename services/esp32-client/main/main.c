@@ -272,7 +272,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
                     if (type && cJSON_IsString(type) &&
                         strcmp(type->valuestring, "tts_url") == 0) {
                         cJSON *url = cJSON_GetObjectItem(root, "url");
-                        if (url && cJSON_IsString(url)) {
+                        if (url && cJSON_IsString(url) && s_tts_url_queue) {
                             char url_buf[TTS_URL_MAX_LEN];
                             strncpy(url_buf, url->valuestring, sizeof(url_buf) - 1);
                             url_buf[sizeof(url_buf) - 1] = '\0';
@@ -519,6 +519,13 @@ void app_main(void) {
         ssd1306_flush();
     }
 
+    /* TTS playback queue + I2S TX must be ready BEFORE WebSocket connects,
+     * because VAD sends cached TTS URL immediately on connection. */
+    s_tts_url_queue = xQueueCreate(4, TTS_URL_MAX_LEN);
+    assert(s_tts_url_queue);
+    init_i2s_tx();
+    xTaskCreatePinnedToCore(tts_play_task, "tts_play", 12288, NULL, 8, NULL, 0);
+
     /* WebSocket client */
     esp_websocket_client_config_t ws_cfg = {
         .uri                  = VAD_WS_URL,
@@ -540,12 +547,6 @@ void app_main(void) {
     if (!s_ws_connected) {
         ESP_LOGW(TAG, "WebSocket 未连接，继续启动音频任务（将在连接后发送）");
     }
-
-    /* TTS playback queue + task (pinned to core 0 to avoid I2S contention) */
-    s_tts_url_queue = xQueueCreate(4, TTS_URL_MAX_LEN);
-    assert(s_tts_url_queue);
-    init_i2s_tx();
-    xTaskCreatePinnedToCore(tts_play_task, "tts_play", 12288, NULL, 8, NULL, 0);
 
     /* Audio capture task pinned to core 1 */
     xTaskCreatePinnedToCore(audio_task, "audio", 8192, NULL, 10, NULL, 1);

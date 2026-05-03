@@ -59,7 +59,10 @@ MAX_SPEECH_CHUNKS = int(MAX_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 # 已连接的 WebSocket 设备注册表 { device_id: websocket }
 _connected_devices: dict = {}
 
-# TTS 播放期间的回声抑制：timestamp 之前不处理 VAD
+# 最近一次 TTS URL，用于新设备连接时立即推送（60s 有效）
+_last_tts: dict = {}  # {"url": str, "ts": float}
+
+# 已弃用：TTS 时间抑制（改用声纹过滤，不再需要）
 _suppress_until: float = 0.0
 
 
@@ -189,8 +192,19 @@ async def handle_client(websocket):
 
     logger.info(f"客户端连接: {addr} device={device_id}")
 
-    # 注册设备 WebSocket
+    # 注册设备 WebSocket（覆盖旧连接，新连接优先）
     _connected_devices[device_id] = websocket
+
+    # 若 60s 内有 TTS 未播放，立即推送给新连接的设备
+    if _last_tts and (time.time() - _last_tts.get("ts", 0) < 60):
+        try:
+            await websocket.send(json.dumps({
+                "type": "tts_url",
+                "url": _last_tts["url"],
+            }, ensure_ascii=False))
+            logger.info(f"补发缓存 TTS → {device_id}: {_last_tts['url']}")
+        except Exception:
+            pass
 
     # 每个连接独立的 VAD 模型实例（线程安全）
     model = load_silero_vad()
@@ -213,14 +227,7 @@ async def handle_client(websocket):
                 if len(chunk) < CHUNK_SAMPLES * 2:
                     continue
 
-                # TTS 回声抑制：播放期间静默 VAD
-                if time.time() < _suppress_until:
-                    is_speaking = False
-                    speech_chunks = 0
-                    silence_chunks = 0
-                    speech_buffer = []
-                    continue
-
+                # TTS 时间抑制已弃用（改用声纹过滤），此处保留短暂抑制作为保险
                 # 转换为 float32 tensor [-1, 1]
                 samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
                 tensor = torch.from_numpy(samples)
@@ -281,11 +288,12 @@ async def handle_client(websocket):
                             }))
                             await websocket.send(json.dumps(result, ensure_ascii=False))
 
-                            # 调用 LLM 生成智能回复（有 ASR 文字时）
-                            if text:
+                            # 调用 LLM 生成智能回复
+                            # 只有声纹识别到的注册用户才进入 LLM（TTS 播放的合成音不是注册用户，天然过滤）
+                            if text and speaker and speaker.get("id"):
                                 asyncio.create_task(call_llm(
                                     text,
-                                    speaker["id"] if speaker else "unknown",
+                                    speaker["id"],
                                     device_id,
                                 ))
                         else:
@@ -317,12 +325,14 @@ async def handle_client(websocket):
     except Exception as e:
         logger.error(f"处理客户端出错: {e}", exc_info=True)
     finally:
-        _connected_devices.pop(device_id, None)
+        # 只移除自己的条目（防止覆盖新连接后被误删）
+        if _connected_devices.get(device_id) is websocket:
+            _connected_devices.pop(device_id)
 
 
 async def _http_forward_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     """极简 asyncio HTTP 服务，支持 POST /api/forward 和 POST /api/suppress"""
-    global _suppress_until
+    global _suppress_until, _last_tts
     try:
         req_line = (await asyncio.wait_for(reader.readline(), timeout=5)).decode()
         path = req_line.split()[1] if len(req_line.split()) > 1 else "/"
@@ -343,15 +353,16 @@ async def _http_forward_handler(reader: asyncio.StreamReader, writer: asyncio.St
             data = json.loads(body_bytes)
 
             if path == "/api/suppress":
-                # 设置回声抑制窗口：{"duration": 秒数}
-                duration = float(data.get("duration", 0))
-                _suppress_until = time.time() + duration
-                logger.info(f"VAD 回声抑制 {duration:.1f}s 直到 {_suppress_until:.1f}")
+                # 已弃用：保留接口兼容性，不再实际抑制 VAD
                 ok = True
 
             elif path == "/api/forward":
                 device  = data.get("device", "")
                 message = data.get("message", {})
+
+                # 缓存 tts_url 消息（供新连接设备补发）
+                if message.get("type") == "tts_url" and message.get("url"):
+                    _last_tts = {"url": message["url"], "ts": time.time()}
 
                 if device == "*":
                     # 广播给所有已连接设备
