@@ -133,6 +133,12 @@
 </head>
 <body>
 
+<!-- 音频解锁提示（点击任意处后自动消失）-->
+<div id="audioUnlockBanner" style="display:none;position:fixed;top:0;left:0;width:100%;z-index:9999;
+  background:#f59e0b;color:#000;text-align:center;padding:8px 16px;font-size:14px;cursor:pointer">
+  🔊 点击页面任意位置以启用 TTS 音频播放
+</div>
+
 <header>
   <h1>🎙️ Voice Pipeline <span>Dashboard</span></h1>
   <div class="conn-badge">
@@ -275,6 +281,57 @@ let recordedBlob = null, selectedFile = null;
 let isRecording = false;
 
 // ──────────────────────────────────────────────
+// AudioContext (unlocked after first user gesture)
+// ──────────────────────────────────────────────
+let _audioCtx = null;
+let _pendingAudio = [];  // queue URLs received before unlock
+
+function getAudioCtx() {
+  if (!_audioCtx) {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+
+async function playAudioUrl(url) {
+  try {
+    const ctx = getAudioCtx();
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    const decoded = await ctx.decodeAudioData(buf);
+    const src = ctx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch (e) {
+    addLog('sys', `⚠️ 音频播放失败: ${e.message}`);
+  }
+}
+
+// Unlock on first user click, then drain queue
+document.addEventListener('click', function unlock() {
+  const ctx = getAudioCtx();
+  // drain any queued audio
+  while (_pendingAudio.length) playAudioUrl(_pendingAudio.shift());
+  // hide the unlock banner if present
+  const banner = document.getElementById('audioUnlockBanner');
+  if (banner) banner.style.display = 'none';
+}, { capture: true });
+
+function queueOrPlayAudio(url) {
+  if (_audioCtx && _audioCtx.state === 'running') {
+    playAudioUrl(url);
+  } else {
+    _pendingAudio.push(url);
+    // show unlock banner
+    const banner = document.getElementById('audioUnlockBanner');
+    if (banner) banner.style.display = '';
+  }
+}
+
+// ──────────────────────────────────────────────
 // WebSocket
 // ──────────────────────────────────────────────
 function connect() {
@@ -380,8 +437,7 @@ function handleEvent(ev) {
     const spkLabel = ev.speaker && ev.speaker !== 'unknown' ? ` [${esc(ev.speaker)}]` : '';
     addLog('llm', `${dev}🔊${spkLabel} TTS 播放: <span style="color:var(--cyan)">"${esc(ev.reply)}"</span>`);
     if (ev.audio_url) {
-      const audio = new Audio(ev.audio_url);
-      audio.play().catch(e => addLog('sys', `⚠️ 音频播放失败: ${e.message}`));
+      queueOrPlayAudio(ev.audio_url);
     }
 
   } else if (t === 'llm_thinking') {
