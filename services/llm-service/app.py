@@ -83,27 +83,37 @@ def _find_wav_data_offset(wav_bytes: bytes) -> int:
 
 
 async def call_tts(text: str) -> tuple[str, bytes] | None:
-    """调用 TTS 服务生成语音，返回 (audio_id, wav_bytes)"""
-    if not TTS_SERVICE_URL or not text:
+    """调用 TTS 服务生成语音，返回 (audio_id, wav_bytes)。遇到限流时重试 3 次。"""
+    import asyncio as _asyncio
+    clean_text = text.strip()
+    if not TTS_SERVICE_URL or not clean_text:
         return None
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(
-                f"{TTS_SERVICE_URL}/tts",
-                json={"text": text, "voice_id": TTS_VOICE_ID, "format": "wav"},
-            )
-            resp.raise_for_status()
-            wav_bytes = resp.content
-        audio_id = uuid.uuid4().hex[:12]
-        # LRU eviction
-        if len(_audio_cache) >= _AUDIO_CACHE_MAX:
-            del _audio_cache[next(iter(_audio_cache))]
-        _audio_cache[audio_id] = wav_bytes
-        logger.info(f"TTS: {len(wav_bytes)} bytes cached as {audio_id}")
-        return audio_id, wav_bytes
-    except Exception as e:
-        logger.warning(f"TTS call failed: {e}")
-        return None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                resp = await client.post(
+                    f"{TTS_SERVICE_URL}/tts",
+                    json={"text": clean_text, "voice_id": TTS_VOICE_ID, "format": "wav"},
+                )
+                if resp.status_code == 502:
+                    body = resp.text
+                    if "limit" in body.lower() and attempt < 2:
+                        logger.warning(f"TTS 限流 (attempt {attempt+1}), 等待 3s 重试...")
+                        await _asyncio.sleep(3)
+                        continue
+                resp.raise_for_status()
+                wav_bytes = resp.content
+            audio_id = uuid.uuid4().hex[:12]
+            if len(_audio_cache) >= _AUDIO_CACHE_MAX:
+                del _audio_cache[next(iter(_audio_cache))]
+            _audio_cache[audio_id] = wav_bytes
+            logger.info(f"TTS: {len(wav_bytes)} bytes cached as {audio_id}")
+            return audio_id, wav_bytes
+        except Exception as e:
+            logger.warning(f"TTS call failed (attempt {attempt+1}): {e}")
+            if attempt < 2:
+                await _asyncio.sleep(2)
+    return None
 
 
 async def forward_to_device(device: str, message: dict):
@@ -201,6 +211,13 @@ async def chat(body: dict):
     if tts_result:
         audio_id, wav_bytes = tts_result
         audio_url = f"http://{HOST_IP}:8006/api/audio/{audio_id}"
+
+        # 计算 TTS 时长，用于回声抑制（32kHz 16-bit mono）
+        pcm_start = _find_wav_data_offset(wav_bytes)
+        pcm_bytes  = len(wav_bytes) - pcm_start
+        tts_duration = pcm_bytes / (32000 * 2)  # seconds
+        suppress_sec = tts_duration + 2.0        # extra 2s buffer
+
         # 推送 TTS 就绪事件到 Dashboard（含音频 URL，浏览器直接播放）
         await push_dashboard({
             "type": "tts_ready",
@@ -210,12 +227,23 @@ async def chat(body: dict):
             "audio_url": audio_url,
             "audio_id": audio_id,
         })
-        # 转发给 ESP32 设备
-        if device and "esp32" in device.lower():
-            asyncio.create_task(forward_to_device(device, {
-                "type": "tts_url",
-                "url": audio_url,
-            }))
+
+        # 通知 VAD 服务开启回声抑制（防止喇叭声音被麦克风重新识别）
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                await client.post(
+                    f"{VAD_SERVICE_URL}/api/suppress",
+                    json={"duration": suppress_sec},
+                )
+            logger.info(f"VAD 回声抑制 {suppress_sec:.1f}s")
+        except Exception as e:
+            logger.debug(f"suppress request failed: {e}")
+
+        # 广播给所有已连接 ESP32 设备（device="*" 由 VAD 服务处理广播）
+        asyncio.create_task(forward_to_device("*", {
+            "type": "tts_url",
+            "url": audio_url,
+        }))
 
     return {"reply": reply, "speaker": speaker, "device": device}
 

@@ -13,9 +13,12 @@ TTS Service - 文字转语音服务
   GET  /health            健康检查
 """
 
+import asyncio
 import json
 import logging
 import os
+import subprocess
+import tempfile
 from typing import AsyncIterator
 
 import httpx
@@ -108,13 +111,38 @@ MIME_TYPES = {
 
 
 # ─────────────────────────── Edge TTS 后端 ───────────────────────────
+def _mp3_to_wav(mp3_bytes: bytes, sample_rate: int = 32000) -> bytes:
+    """使用 ffmpeg 将 MP3 转换为 WAV（PCM 16-bit, mono, 指定采样率）。"""
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        f.write(mp3_bytes)
+        mp3_path = f.name
+    wav_path = mp3_path.replace(".mp3", ".wav")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", mp3_path,
+             "-ar", str(sample_rate), "-ac", "1",
+             "-acodec", "pcm_s16le", wav_path],
+            capture_output=True, check=True, timeout=15,
+        )
+        with open(wav_path, "rb") as wf:
+            return wf.read()
+    finally:
+        for p in (mp3_path, wav_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
 async def edge_tts_synthesize(
     text: str,
     voice: str = "zh-CN-XiaoxiaoNeural",
     rate: str = "+0%",
     volume: str = "+0%",
+    fmt: str = "mp3",
+    sample_rate: int = DEFAULT_SAMPLE_RATE,
 ) -> bytes:
-    """调用 edge-tts 合成，返回 MP3 字节。"""
+    """调用 edge-tts 合成，返回 MP3 或 WAV 字节。"""
     try:
         import edge_tts  # type: ignore
     except ImportError:
@@ -127,7 +155,11 @@ async def edge_tts_synthesize(
             audio_chunks.append(chunk["data"])
     if not audio_chunks:
         raise HTTPException(status_code=502, detail="Edge TTS 返回空音频")
-    return b"".join(audio_chunks)
+    mp3_bytes = b"".join(audio_chunks)
+    if fmt == "wav":
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _mp3_to_wav, mp3_bytes, sample_rate)
+    return mp3_bytes
 
 
 async def edge_tts_stream(
@@ -296,7 +328,7 @@ async def synthesize(
         return await minimax_synthesize(text, voice_id, speed, volume, pitch, fmt, sample_rate)
     # edge backend（默认）
     rate = _speed_to_edge_rate(speed)
-    return await edge_tts_synthesize(text, voice_id, rate=rate)
+    return await edge_tts_synthesize(text, voice_id, rate=rate, fmt=fmt, sample_rate=sample_rate)
 
 
 # ─────────────────────────── FastAPI ───────────────────────────

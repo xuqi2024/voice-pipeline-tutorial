@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import struct
+import time
 import wave
 from collections import deque
 from typing import Optional
@@ -57,6 +58,9 @@ MAX_SPEECH_CHUNKS = int(MAX_SPEECH_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
 
 # 已连接的 WebSocket 设备注册表 { device_id: websocket }
 _connected_devices: dict = {}
+
+# TTS 播放期间的回声抑制：timestamp 之前不处理 VAD
+_suppress_until: float = 0.0
 
 
 def build_wav_bytes(pcm_chunks: list[bytes]) -> bytes:
@@ -209,6 +213,14 @@ async def handle_client(websocket):
                 if len(chunk) < CHUNK_SAMPLES * 2:
                     continue
 
+                # TTS 回声抑制：播放期间静默 VAD
+                if time.time() < _suppress_until:
+                    is_speaking = False
+                    speech_chunks = 0
+                    silence_chunks = 0
+                    speech_buffer = []
+                    continue
+
                 # 转换为 float32 tensor [-1, 1]
                 samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
                 tensor = torch.from_numpy(samples)
@@ -309,9 +321,11 @@ async def handle_client(websocket):
 
 
 async def _http_forward_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    """极简 asyncio HTTP 服务，仅支持 POST /api/forward"""
+    """极简 asyncio HTTP 服务，支持 POST /api/forward 和 POST /api/suppress"""
+    global _suppress_until
     try:
         req_line = (await asyncio.wait_for(reader.readline(), timeout=5)).decode()
+        path = req_line.split()[1] if len(req_line.split()) > 1 else "/"
         headers: dict[str, str] = {}
         while True:
             line = (await asyncio.wait_for(reader.readline(), timeout=5)).decode().strip()
@@ -327,15 +341,46 @@ async def _http_forward_handler(reader: asyncio.StreamReader, writer: asyncio.St
         ok = False
         try:
             data = json.loads(body_bytes)
-            device  = data.get("device", "")
-            message = data.get("message", {})
-            ws = _connected_devices.get(device)
-            if ws:
-                await ws.send(json.dumps(message, ensure_ascii=False))
+
+            if path == "/api/suppress":
+                # 设置回声抑制窗口：{"duration": 秒数}
+                duration = float(data.get("duration", 0))
+                _suppress_until = time.time() + duration
+                logger.info(f"VAD 回声抑制 {duration:.1f}s 直到 {_suppress_until:.1f}")
                 ok = True
-                logger.info(f"转发 {message.get('type','?')} → {device}")
-            else:
-                logger.debug(f"设备 {device!r} 未连接，已知: {list(_connected_devices.keys())}")
+
+            elif path == "/api/forward":
+                device  = data.get("device", "")
+                message = data.get("message", {})
+
+                if device == "*":
+                    # 广播给所有已连接设备
+                    for dev_id, ws in list(_connected_devices.items()):
+                        try:
+                            await ws.send(json.dumps(message, ensure_ascii=False))
+                            logger.info(f"广播 {message.get('type','?')} → {dev_id}")
+                            ok = True
+                        except Exception as e:
+                            logger.debug(f"广播到 {dev_id} 失败: {e}")
+                elif device.endswith("*"):
+                    # 前缀匹配，如 "esp32*"
+                    prefix = device[:-1]
+                    for dev_id, ws in list(_connected_devices.items()):
+                        if dev_id.startswith(prefix):
+                            try:
+                                await ws.send(json.dumps(message, ensure_ascii=False))
+                                logger.info(f"前缀匹配转发 {message.get('type','?')} → {dev_id}")
+                                ok = True
+                            except Exception as e:
+                                logger.debug(f"转发到 {dev_id} 失败: {e}")
+                else:
+                    ws = _connected_devices.get(device)
+                    if ws:
+                        await ws.send(json.dumps(message, ensure_ascii=False))
+                        ok = True
+                        logger.info(f"转发 {message.get('type','?')} → {device}")
+                    else:
+                        logger.debug(f"设备 {device!r} 未连接，已知: {list(_connected_devices.keys())}")
         except Exception as e:
             logger.warning(f"forward handler error: {e}")
 

@@ -12,7 +12,7 @@ services:
       - MINIMAX_MODEL=MiniMax-M2.7
       - DASHBOARD_URL=http://dashboard:8080
       - TTS_SERVICE_URL=http://172.18.0.1:8766
-      - TTS_VOICE_ID=female-shaonv
+      - TTS_VOICE_ID=zh-CN-XiaoxiaoNeural
       - VAD_SERVICE_URL=http://vad-service:8767
       - HOST_IP=192.168.1.8
     extra_hosts:

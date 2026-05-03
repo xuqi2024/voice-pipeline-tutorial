@@ -463,7 +463,7 @@ static void audio_task(void *arg) {
                      (rms_l > 100 || rms_r > 100) ? "(active)"  : "(low)");
         }
 
-        if (s_ws_connected && s_ws_client) {
+        if (s_ws_connected && s_ws_client && !s_tts_playing) {
             int sent = esp_websocket_client_send_bin(
                 s_ws_client, (const char *)pcm_buf, n * 2,
                 pdMS_TO_TICKS(200));

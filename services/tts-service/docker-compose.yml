@@ -9,9 +9,9 @@ services:
       - HOST=0.0.0.0
       - PORT=8766
       # 后端选择: minimax（Plus 套餐含 Speech 2.8-HD，4000字/日）或 edge（免费备用）
-      - TTS_BACKEND=minimax
-      # 默认音色（minimax 后端用 female-*/male-*）
-      - DEFAULT_VOICE=female-shaonv
+      - TTS_BACKEND=edge
+      # 默认音色（edge 后端用 zh-CN-*Neural，minimax 后端用 female-*/male-*）
+      - DEFAULT_VOICE=zh-CN-XiaoxiaoNeural
       # MiniMax 配置
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
       - MINIMAX_BASE_URL=https://api.minimaxi.com

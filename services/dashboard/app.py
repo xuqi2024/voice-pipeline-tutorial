@@ -42,8 +42,11 @@ class BroadcastManager:
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.connections.append(ws)
-        # 将历史事件发给新连接的浏览器
+        # 将历史事件发给新连接的浏览器（跳过 tts_ready，避免重复播放音频）
+        _no_replay = {'tts_ready'}
         for event in self.history[-100:]:
+            if event.get('type') in _no_replay:
+                continue
             try:
                 await ws.send_json(event)
             except Exception:
