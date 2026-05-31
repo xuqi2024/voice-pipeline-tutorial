@@ -29,6 +29,7 @@ PORT = int(os.getenv("PORT", "8080"))
 VOICEPRINT_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005")
 API_KEY = os.getenv("VOICEPRINT_API_KEY", "de395e06-035c-44f9-9a6b-8ef126a8bea0")
 MIC_SERVICE_URL = os.getenv("MIC_SERVICE_URL", "http://mic-service:8001")
+PERSONA_AGENT_URL = os.getenv("PERSONA_AGENT_URL", "http://persona-agent:8009")
 
 app = FastAPI(title="Voice Pipeline Dashboard", docs_url="/api/docs")
 
@@ -193,6 +194,52 @@ async def delete_speaker(speaker_id: str):
         logger.info(f"删除声纹: {speaker_id}")
     return JSONResponse(result, status_code=resp.status_code)
 
+
+
+# ──────────────────────────── 人物画像 API 代理 ───────────────────────────────
+@app.get("/api/persona/profiles")
+async def persona_profiles():
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(f"{PERSONA_AGENT_URL}/api/profiles")
+    return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@app.get("/api/persona/profile/{speaker_id:path}")
+async def persona_profile(speaker_id: str):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(f"{PERSONA_AGENT_URL}/api/profile/{speaker_id}")
+    return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@app.post("/api/persona/analyze/{speaker_id:path}")
+async def persona_analyze(speaker_id: str):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(f"{PERSONA_AGENT_URL}/api/analyze/{speaker_id}")
+    return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@app.put("/api/persona/transcript/{tid}/filter")
+async def persona_filter_transcript(tid: int, req: dict):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.put(
+            f"{PERSONA_AGENT_URL}/api/transcript/{tid}/filter",
+            json=req,
+        )
+    return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@app.put("/api/persona/transcript/{tid}/unfilter")
+async def persona_unfilter_transcript(tid: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.put(f"{PERSONA_AGENT_URL}/api/transcript/{tid}/unfilter")
+    return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@app.delete("/api/persona/profile/{speaker_id:path}")
+async def persona_delete_profile(speaker_id: str):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.delete(f"{PERSONA_AGENT_URL}/api/profile/{speaker_id}")
+    return JSONResponse(resp.json(), status_code=resp.status_code)
 
 
 # ──────────────────────────── 系统状态 ───────────────────────

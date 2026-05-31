@@ -24,10 +24,10 @@
   .conn-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
 
   /* ── Layout ── */
-  .main { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr; gap: 0; height: calc(100vh - 49px); }
+  .main { display: grid; grid-template-columns: 280px 1fr; gap: 0; height: calc(100vh - 49px); }
 
   /* ── Pipeline sidebar ── */
-  .sidebar { grid-row: 1 / 3; border-right: 1px solid var(--border); overflow-y: auto; background: var(--bg2); }
+  .sidebar { border-right: 1px solid var(--border); overflow-y: auto; background: var(--bg2); }
   .sidebar section { padding: 16px; border-bottom: 1px solid var(--border); }
   .sidebar h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
 
@@ -52,7 +52,7 @@
   .stat-lbl { font-size: 10px; color: var(--muted); margin-top: 4px; }
 
   /* ── Event log ── */
-  .log-panel { display: flex; flex-direction: column; overflow: hidden; }
+  .log-panel { display: flex; flex-direction: column; overflow: hidden; flex: 1; min-height: 0; }
   .log-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--bg2); }
   .log-header h2 { font-size: 13px; font-weight: 600; }
   .log-controls { display: flex; gap: 8px; }
@@ -142,6 +142,45 @@
 
   /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Tab Bar ── */
+.content-wrapper { display:flex; flex-direction:column; overflow:hidden; min-height:0; }
+.tab-bar { display:flex; gap:4px; padding:8px 12px 0; background:var(--bg); border-bottom:1px solid var(--border); flex-shrink:0; }
+.tab-btn { background:none; border:none; color:var(--muted); font-size:13px; padding:6px 14px; border-radius:6px 6px 0 0; cursor:pointer; font-weight:500; transition:all .15s; }
+.tab-btn:hover { color:var(--fg); background:rgba(255,255,255,.06); }
+.tab-btn.tab-active { color:var(--accent); background:rgba(99,179,237,.1); border-bottom:2px solid var(--accent); }
+
+/* ── Persona Panel ── */
+.persona-panel { display:flex; flex-direction:column; overflow:hidden; flex:1; min-height:0; }
+.persona-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border); }
+.persona-header h2 { margin:0; font-size:15px; }
+.persona-hint { font-size:11px; color:var(--muted); }
+.persona-list { flex:1; overflow-y:auto; padding:12px; display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; align-content:start; }
+.persona-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px; cursor:pointer; transition:border-color .15s; }
+.persona-card:hover { border-color:var(--accent); }
+.pc-top { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.pc-avatar { font-size:28px; }
+.pc-name { font-size:14px; font-weight:600; }
+.pc-meta { font-size:11px; color:var(--muted); margin-top:2px; }
+.pc-summary { font-size:12px; color:var(--muted); line-height:1.5; }
+.pc-stats { display:flex; gap:12px; margin-top:8px; }
+.pc-stat { font-size:11px; color:var(--muted); }
+.pc-stat span { color:var(--fg); font-weight:600; }
+.persona-detail { flex:1; overflow-y:auto; padding:12px; }
+.persona-detail-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid var(--border); }
+.persona-detail-header h3 { margin:0; flex:1; font-size:15px; }
+.fact-section { margin-bottom:16px; }
+.fact-section h4 { font-size:12px; font-weight:700; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; margin:0 0 6px; }
+.fact-list { display:flex; flex-wrap:wrap; gap:6px; }
+.fact-chip { background:rgba(99,179,237,.12); border:1px solid rgba(99,179,237,.25); border-radius:14px; padding:3px 10px; font-size:12px; }
+.transcript-row { padding:6px 0; border-bottom:1px solid var(--border); font-size:12px; display:flex; align-items:flex-start; gap:8px; }
+.tr-time { color:var(--muted); white-space:nowrap; min-width:55px; }
+.tr-text { flex:1; line-height:1.5; }
+.tr-badge { font-size:10px; padding:1px 6px; border-radius:8px; background:rgba(255,255,255,.1); white-space:nowrap; }
+.tr-filter-btn { font-size:10px; padding:2px 6px; border-radius:6px; border:1px solid var(--border); background:none; color:var(--muted); cursor:pointer; }
+.tr-filter-btn:hover { color:var(--fg); }
+.btn-sm.danger { border-color:rgba(239,68,68,.5); color:rgb(239,68,68); }
+.btn-sm.danger:hover { background:rgba(239,68,68,.1); }
 </style>
 </head>
 <body>
@@ -217,8 +256,38 @@
     </section>
   </aside>
 
+  <div class="content-wrapper">
+  <!-- ── Tab Bar ── -->
+  <div class="tab-bar">
+    <button class="tab-btn tab-active" id="tab-events" onclick="switchTab('events')">📋 事件流</button>
+    <button class="tab-btn" id="tab-personas" onclick="switchTab('personas')">👥 人物画像</button>
+  </div>
+
+  <!-- ── Persona Panel ── -->
+  <div id="panel-personas" style="display:none" class="persona-panel">
+    <div class="persona-header">
+      <h2>人物画像</h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn-sm" onclick="refreshPersonas()">🔄 刷新</button>
+        <span class="persona-hint" id="personaHint">每30秒自动刷新</span>
+      </div>
+    </div>
+    <div id="personaList" class="persona-list">
+      <div style="color:var(--muted);text-align:center;padding:40px">正在加载...</div>
+    </div>
+    <!-- Detail panel -->
+    <div id="personaDetail" class="persona-detail" style="display:none">
+      <div class="persona-detail-header">
+        <button class="btn-sm" onclick="closeDetail()">← 返回</button>
+        <h3 id="detailName"></h3>
+        <button class="btn-sm danger" id="detailAnalyzeBtn" onclick="triggerAnalysis()">⚡ 立即分析</button>
+      </div>
+      <div id="detailBody"></div>
+    </div>
+  </div>
+
   <!-- ── Event Log ── -->
-  <div class="log-panel">
+  <div id="panel-events" class="log-panel">
     <div class="log-header">
       <h2>实时事件流</h2>
       <div class="log-controls">
@@ -304,6 +373,7 @@
       </div>
     </div>
   </div>
+  </div><!-- /content-wrapper -->
 </div>
 
 <script>
@@ -766,6 +836,186 @@ function esc(s) {
 // ──────────────────────────────────────────────
 // Init
 // ──────────────────────────────────────────────
+// ──────────────────────────────────────────────
+// Persona Tab
+// ──────────────────────────────────────────────
+const PERSONA_BASE = '/api/persona';
+let currentSpeakerId = null;
+
+function switchTab(name) {
+  ['events','personas'].forEach(t => {
+    document.getElementById('panel-'+t).style.display = t===name ? '' : 'none';
+    document.getElementById('tab-'+t).classList.toggle('tab-active', t===name);
+  });
+  if (name === 'personas') refreshPersonas();
+}
+
+async function refreshPersonas() {
+  try {
+    const r = await fetch(PERSONA_BASE + '/profiles');
+    if (!r.ok) { document.getElementById('personaList').innerHTML = '<div style="color:var(--muted);text-align:center;padding:40px">无法连接 persona-agent</div>'; return; }
+    const profiles = await r.json();
+    renderPersonaList(profiles);
+    document.getElementById('personaHint').textContent = '更新于 ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('personaList').innerHTML = '<div style="color:var(--muted);text-align:center;padding:40px">连接失败: ' + esc(String(e)) + '</div>';
+  }
+}
+
+function renderPersonaList(profiles) {
+  const el = document.getElementById('personaList');
+  if (!profiles.length) { el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:40px">暂无画像数据<br><small>说话后自动出现</small></div>'; return; }
+  el.innerHTML = profiles.map(p => {
+    const isReg = p.is_registered;
+    const emoji = isReg ? '👤' : '❓';
+    const name = esc(p.display_name || p.id);
+    const lastSeen = p.last_seen ? new Date(p.last_seen).toLocaleString() : '—';
+    const summary = esc(p.profile_summary || '暂无摘要');
+    return `<div class="persona-card" onclick="showDetail('${esc(p.id)}')">
+      <div class="pc-top">
+        <div class="pc-avatar">${emoji}</div>
+        <div>
+          <div class="pc-name">${name} ${isReg ? '' : '<small style="color:var(--muted)">(未识别)</small>'}</div>
+          <div class="pc-meta">最后活跃：${lastSeen}</div>
+        </div>
+      </div>
+      <div class="pc-summary">${summary}</div>
+      <div class="pc-stats">
+        <div class="pc-stat">发言 <span>${p.total_utterances||0}</span></div>
+        <div class="pc-stat">画像特征 <span>${p.fact_count||0}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function showDetail(speakerId) {
+  currentSpeakerId = speakerId;
+  document.getElementById('personaList').style.display = 'none';
+  document.getElementById('personaDetail').style.display = '';
+  document.getElementById('detailName').textContent = '加载中...';
+  document.getElementById('detailBody').innerHTML = '';
+  try {
+    const r = await fetch(PERSONA_BASE + '/profile/' + encodeURIComponent(speakerId));
+    if (!r.ok) { document.getElementById('detailBody').innerHTML = '<div style="color:red">加载失败</div>'; return; }
+    const data = await r.json();
+    renderDetail(data);
+  } catch(e) {
+    document.getElementById('detailBody').innerHTML = '<div style="color:red">' + esc(String(e)) + '</div>';
+  }
+}
+
+function renderDetail(data) {
+  const sp = data.speaker;
+  document.getElementById('detailName').textContent = (sp.is_registered ? '👤 ' : '❓ ') + (sp.display_name || sp.id);
+  
+  // 画像特征分组
+  const facts = data.facts || [];
+  const catMap = {};
+  facts.forEach(f => { if (!catMap[f.category]) catMap[f.category] = []; catMap[f.category].push(f.fact); });
+  const catNames = {personality:'性格特征', interest:'兴趣爱好', opinion:'观点立场', habit:'行为习惯', context:'背景信息', background:'背景信息', relationship:'人际关系', other:'其他'};
+  
+  let html = '';
+  if (sp.profile_summary) html += `<div style="margin-bottom:14px;padding:10px;background:var(--card);border-radius:8px;font-size:13px;line-height:1.6">${esc(sp.profile_summary)}</div>`;
+  
+  if (facts.length) {
+    html += '<div class="fact-section">';
+    Object.entries(catMap).forEach(([cat, items]) => {
+      const label = catNames[cat] || cat;
+      html += `<div class="fact-section"><h4>${esc(label)}</h4><div class="fact-list">`;
+      items.forEach(item => { html += `<div class="fact-chip">${esc(item)}</div>`; });
+      html += '</div></div>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div style="color:var(--muted);font-size:13px;margin-bottom:14px">暂无画像特征（发言 8 句后自动分析）</div>';
+  }
+  
+  // 近期对话
+  const txs = (data.transcripts || []).filter(t => !t.is_filtered).slice(-30);
+  if (txs.length) {
+    html += '<h4 style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;margin:0 0 6px">近期发言</h4>';
+    html += txs.reverse().map(t => {
+      const ts = t.ts ? new Date(t.ts).toLocaleTimeString() : '';
+      const badge = t.directed_at_ai === 1 ? '<span class="tr-badge" style="background:rgba(99,179,237,.2)">→AI</span>' : t.directed_at_ai === 0 ? '<span class="tr-badge">→人</span>' : '';
+      return `<div class="transcript-row">
+        <span class="tr-time">${ts}</span>
+        <span class="tr-text">${esc(t.text)}</span>
+        ${badge}
+        <button class="tr-filter-btn" onclick="filterTx(${t.id},event)" title="标记为测试/过滤">🗑</button>
+      </div>`;
+    }).join('');
+  }
+  
+  document.getElementById('detailBody').innerHTML = html;
+}
+
+async function filterTx(id, event) {
+  event.stopPropagation();
+  try {
+    await fetch(PERSONA_BASE + '/transcript/' + id + '/filter', {method:'PUT', headers:{'Content-Type':'application/json'}, body:'{"reason":"manual"}'});
+    if (currentSpeakerId) showDetail(currentSpeakerId);
+  } catch(e) {}
+}
+
+async function triggerAnalysis() {
+  if (!currentSpeakerId) return;
+  const btn = document.getElementById('detailAnalyzeBtn');
+  const speakerAtStart = currentSpeakerId;
+  btn.disabled = true; btn.textContent = '分析中...';
+
+  // 记录触发前的 last_analyzed_at 作为基准
+  let prevAnalyzedAt = null;
+  try {
+    const r = await fetch(PERSONA_BASE + '/profile/' + encodeURIComponent(speakerAtStart));
+    if (r.ok) { const d = await r.json(); prevAnalyzedAt = d.speaker?.last_analyzed_at || null; }
+  } catch(e) {}
+
+  try {
+    await fetch(PERSONA_BASE + '/analyze/' + encodeURIComponent(speakerAtStart), {method:'POST'});
+  } catch(e) {
+    btn.disabled = false; btn.textContent = '⚡ 立即分析'; return;
+  }
+
+  // 每 5 秒轮询，直到 last_analyzed_at 更新或超时 90 秒
+  const maxPolls = 18;
+  let polls = 0;
+  const pollTimer = setInterval(async () => {
+    polls++;
+    if (currentSpeakerId !== speakerAtStart || polls > maxPolls) {
+      clearInterval(pollTimer);
+      if (currentSpeakerId === speakerAtStart) {
+        btn.disabled = false; btn.textContent = '⚡ 立即分析';
+      }
+      return;
+    }
+    try {
+      const r = await fetch(PERSONA_BASE + '/profile/' + encodeURIComponent(speakerAtStart));
+      if (r.ok) {
+        const d = await r.json();
+        const newAt = d.speaker?.last_analyzed_at || null;
+        if (newAt && newAt !== prevAnalyzedAt) {
+          clearInterval(pollTimer);
+          if (currentSpeakerId === speakerAtStart) {
+            renderDetail(d);
+            btn.disabled = false; btn.textContent = '⚡ 立即分析';
+          }
+        }
+      }
+    } catch(e) {}
+  }, 5000);
+}
+
+function closeDetail() {
+  document.getElementById('personaDetail').style.display = 'none';
+  document.getElementById('personaList').style.display = '';
+  currentSpeakerId = null;
+}
+
+// 自动刷新画像列表（仅当 personas tab 激活时）
+setInterval(() => {
+  if (document.getElementById('panel-personas').style.display !== 'none') refreshPersonas();
+}, 30000);
+
 connect();
 fetchHealth();
 setInterval(fetchHealth, 30000);
