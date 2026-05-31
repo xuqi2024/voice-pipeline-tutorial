@@ -218,7 +218,7 @@ SUMMARY_TMPL = """根据以下说话人的画像特征和近期发言，用200�
 async def call_llm(messages: list, system: str = "") -> Optional[str]:
     """调用 MiniMax Anthropic API."""
     try:
-        payload: dict = {"model": MINIMAX_MODEL, "max_tokens": 2048, "messages": messages}
+        payload: dict = {"model": MINIMAX_MODEL, "max_tokens": 6000, "messages": messages}
         if system:
             payload["system"] = system
         async with httpx.AsyncClient(timeout=90) as c:
@@ -226,7 +226,13 @@ async def call_llm(messages: list, system: str = "") -> Optional[str]:
                 headers={"x-api-key": MINIMAX_API_KEY, "anthropic-version": "2023-06-01"},
                 json=payload)
         if r.status_code == 200:
-            return r.json()["content"][0]["text"]
+            # MiniMax M2.7 返回 thinking + text 两个 content block，取第一个 type=text 的
+            content_blocks = r.json().get("content", [])
+            text_block = next((b for b in content_blocks if b.get("type") == "text"), None)
+            if text_block:
+                return text_block["text"]
+            logger.warning(f"LLM 响应无 text block，content types: {[b.get('type') for b in content_blocks]}")
+            return None
         logger.warning(f"LLM 调用失败: {r.status_code} {r.text[:200]}")
     except Exception as e:
         logger.warning(f"LLM 异常: {e}")
@@ -243,11 +249,11 @@ async def run_batch_analysis(speaker_id: str):
 
 async def _do_batch_analysis(speaker_id: str):
     with db() as c:
-        # 取最近 30 条未过滤的发言
+        # 取最近 20 条未过滤的发言（减小 prompt 体积，避免超 token 限制）
         rows = c.execute("""
             SELECT id, text FROM transcripts
             WHERE speaker_id = ? AND is_filtered = 0
-            ORDER BY ts DESC LIMIT 30
+            ORDER BY ts DESC LIMIT 20
         """, (speaker_id,)).fetchall()
     if not rows:
         return
@@ -264,12 +270,34 @@ async def _do_batch_analysis(speaker_id: str):
             c.commit()
         return
 
-    # 解析 JSON
+    # 解析 JSON（兼容 markdown 代码块，容忍尾部截断）
     try:
         clean = result_text.strip()
+        # 去掉 markdown 代码块
         if "```" in clean:
-            clean = clean.split("```")[1].lstrip("json").strip().rstrip("```")
-        data = json.loads(clean)
+            parts = clean.split("```")
+            for part in parts:
+                candidate = part.lstrip("json").strip()
+                if candidate.startswith("{"):
+                    clean = candidate
+                    break
+        # 尝试完整解析
+        try:
+            data = json.loads(clean)
+        except json.JSONDecodeError:
+            # 截断恢复：找到最后一个完整的 intents 项或 profiles 闭合
+            last_brace = clean.rfind('}')
+            if last_brace > 0:
+                # 找到最外层 json 能解析的最大前缀
+                for end in range(len(clean), last_brace, -1):
+                    try:
+                        data = json.loads(clean[:end])
+                        logger.warning(f"JSON 截断恢复成功（原始长度 {len(clean)}，截取 {end}）")
+                        break
+                    except json.JSONDecodeError:
+                        continue
+                else:
+                    raise ValueError("无法恢复截断 JSON")
     except Exception as e:
         logger.warning(f"JSON 解析失败: {e}\n{result_text[:300]}")
         with db() as c:
