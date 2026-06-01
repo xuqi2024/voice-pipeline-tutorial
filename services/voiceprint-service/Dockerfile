@@ -48,4 +48,6 @@ COPY patches/database/voiceprint_db.py /app/app/database/voiceprint_db.py
 
 EXPOSE 8005
 
+COPY patches/main.py /app/app/main.py
+
 CMD ["python", "-m", "app.main"]

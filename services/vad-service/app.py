@@ -50,6 +50,7 @@ VOICEPRINT_API_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005
 VOICEPRINT_API_KEY = os.getenv("VOICEPRINT_API_KEY", "de395e06-035c-44f9-9a6b-8ef126a8bea0")
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "")  # 留空则不推送
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "")  # 留空则不调用 LLM
+PERSONA_AGENT_URL = os.getenv("PERSONA_AGENT_URL", "")  # 留空则不转发画像
 HTTP_API_PORT = int(os.getenv("HTTP_API_PORT", "8767"))  # 内部 HTTP API 端口
 
 MIN_SILENCE_CHUNKS = int(MIN_SILENCE_MS / (CHUNK_SAMPLES / SAMPLE_RATE * 1000))
@@ -164,6 +165,25 @@ async def call_llm(text: str, speaker: str, device: str):
             )
     except Exception as e:
         logger.warning(f"LLM service call failed: {e}")
+
+
+async def push_to_persona(text: str, speaker_id, duration_ms: float, conv_id: str):
+    """推送语音片段到 persona-agent（fire-and-forget）"""
+    if not PERSONA_AGENT_URL or not text:
+        return
+    try:
+        import uuid as _uuid
+        payload = {
+            "text": text,
+            "speaker_id": speaker_id or "unknown",
+            "duration_ms": duration_ms,
+            "conv_id": conv_id,
+            "utterance_id": _uuid.uuid4().hex,
+        }
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(f"{PERSONA_AGENT_URL}/api/segment", json=payload)
+    except Exception as e:
+        logger.debug(f"persona-agent forward failed: {e}")
 
 
 async def recognize_with_funasr(wav_bytes: bytes) -> Optional[str]:
@@ -343,6 +363,14 @@ async def handle_client(websocket):
                                 "speaker": speaker,
                             }
                             logger.info(f"结果 [{device_id}]: text={text!r} speaker={speaker}")
+                            # 转发到 persona-agent 旁听分析
+                            _conv_id = str(int(time.time() // 1800))
+                            asyncio.create_task(push_to_persona(
+                                text or "",
+                                speaker["id"] if speaker else None,
+                                duration_ms,
+                                _conv_id,
+                            ))
                             asyncio.create_task(push_event({
                                 "type": "result",
                                 "text": text or "",

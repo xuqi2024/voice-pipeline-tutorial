@@ -34,13 +34,18 @@ services:
       - ""
       - --hotword
       - /workspace/hotwords.txt
+      - --decoder-thread-num
+      - "2"
+      - --io-thread-num
+      - "1"
+    mem_limit: 2.2g
     networks:
       - voice-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "curl -s --max-time 3 http://localhost:10095/ || exit 0"]
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',10095),timeout=3); s.close()"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 120s
 
 volumes:

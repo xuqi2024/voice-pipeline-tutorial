@@ -207,21 +207,53 @@ async def vad_receiver(websocket, debug: bool):
             logger.warning(f"无法解析结果: {message}")
 
 
+async def _connect_and_stream(ws, audio_queue: Queue, debug: bool):
+    """在已建立的 WebSocket 连接上持续发送音频块，直到连接关闭。"""
+    recv_task = asyncio.create_task(vad_receiver(ws, debug))
+    sent_chunks = 0
+    start_time = time.time()
+    try:
+        while True:
+            try:
+                chunk = audio_queue.get_nowait()
+            except Empty:
+                await asyncio.sleep(0.001)
+                continue
+
+            # 带超时的 send，防止在断开的连接上永久阻塞
+            await asyncio.wait_for(ws.send(chunk), timeout=5.0)
+            sent_chunks += 1
+
+            if debug and sent_chunks % 50 == 0:
+                elapsed = time.time() - start_time
+                bar = volume_bar(chunk)
+                print(f"\r音量: {bar} ({sent_chunks} 块, {elapsed:.1f}s)", end="", flush=True)
+    finally:
+        recv_task.cancel()
+        try:
+            await recv_task
+        except asyncio.CancelledError:
+            pass
+
+
 async def stream_microphone(
     device_index: int,
     vad_url: str,
     debug: bool = False,
 ):
-    """采集麦克风并发送到 VAD 服务"""
-    audio_queue: Queue = Queue(maxsize=100)
+    """采集麦克风并持续发送到 VAD 服务，断线自动重连。"""
+    # 队列调大，减少因 VAD 短暂慢速导致的丢帧
+    audio_queue: Queue = Queue(maxsize=200)
 
     def audio_callback(indata, frames, time_info, status):
         if status:
             logger.warning(f"音频状态: {status}")
         pcm = (indata[:, 0] * 32767).astype(np.int16).tobytes()
-        audio_queue.put_nowait(pcm)
+        try:
+            audio_queue.put_nowait(pcm)
+        except Exception:
+            pass  # 队列满时丢弃最新帧，保证回调不阻塞
 
-        # 服务端录音缓冲
         global _recording
         if _recording:
             with _record_lock:
@@ -229,55 +261,51 @@ async def stream_microphone(
                 if len(_record_chunks) >= _record_target_chunks:
                     _recording = False
 
-    logger.info(f"麦克风已启动，连接 VAD 服务: {vad_url}")
-    print("开始录音，按 Ctrl+C 停止...\n")
-
-    sent_chunks = 0
-    start_time = time.time()
-
-    # Get device channel count (some USB mics only support stereo)
     dev_info = sd.query_devices(device_index, kind="input")
     channels = min(dev_info["max_input_channels"], 2)
     logger.info(f"设备通道数: {channels}")
+    logger.info(f"连接 VAD 服务: {vad_url}")
+    print("开始录音，按 Ctrl+C 停止...\n")
 
-    try:
-        async with websockets.connect(vad_url, open_timeout=10) as ws:
-            logger.info("✅ 已连接到 VAD 服务")
+    retry_delay = 3   # 初始重连等待秒数
+    MAX_DELAY   = 60  # 最长重连等待秒数
 
-            with sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=channels,
-                dtype="float32",
-                blocksize=CHUNK_SAMPLES,
-                device=device_index,
-                callback=audio_callback,
-            ):
-                recv_task = asyncio.create_task(vad_receiver(ws, debug))
+    with sd.InputStream(
+        samplerate=SAMPLE_RATE,
+        channels=channels,
+        dtype="float32",
+        blocksize=CHUNK_SAMPLES,
+        device=device_index,
+        callback=audio_callback,
+    ):
+        while True:
+            try:
+                async with websockets.connect(
+                    vad_url, open_timeout=10, ping_interval=20, ping_timeout=10
+                ) as ws:
+                    logger.info("✅ 已连接到 VAD 服务")
+                    retry_delay = 3  # 连接成功后重置退避
+                    # 清空积压的旧音频帧，从当前时刻开始发送
+                    while not audio_queue.empty():
+                        try:
+                            audio_queue.get_nowait()
+                        except Empty:
+                            break
+                    await _connect_and_stream(ws, audio_queue, debug)
 
-                while True:
-                    try:
-                        chunk = audio_queue.get_nowait()
-                    except Empty:
-                        await asyncio.sleep(0.001)
-                        continue
+            except (websockets.exceptions.ConnectionClosed,
+                    websockets.exceptions.InvalidHandshake,
+                    websockets.exceptions.WebSocketException) as e:
+                logger.warning(f"VAD 连接断开: {e}，{retry_delay}s 后重连...")
+            except (ConnectionRefusedError, OSError) as e:
+                logger.warning(f"VAD 不可达: {e}，{retry_delay}s 后重试...")
+            except asyncio.TimeoutError:
+                logger.warning(f"VAD send 超时，{retry_delay}s 后重连...")
+            except Exception as e:
+                logger.error(f"意外错误: {e}，{retry_delay}s 后重试...")
 
-                    await ws.send(chunk)
-                    sent_chunks += 1
-
-                    if debug and sent_chunks % 50 == 0:
-                        elapsed = time.time() - start_time
-                        bar = volume_bar(chunk)
-                        print(
-                            f"\r音量: {bar} ({sent_chunks} 块, {elapsed:.1f}s)",
-                            end="",
-                            flush=True,
-                        )
-
-    except websockets.exceptions.ConnectionClosed as e:
-        logger.error(f"VAD 服务连接断开: {e}")
-    except ConnectionRefusedError:
-        logger.error(f"无法连接到 VAD 服务: {vad_url}")
-        logger.error("请确认 VAD 服务已启动: cd services/vad-service && docker compose up -d")
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, MAX_DELAY)
 
 
 def main():

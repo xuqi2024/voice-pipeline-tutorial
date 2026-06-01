@@ -18,13 +18,15 @@ services:
       - VOICEPRINT_API_KEY=de395e06-035c-44f9-9a6b-8ef126a8bea0
       - DASHBOARD_URL=http://dashboard:8080
       - LLM_SERVICE_URL=http://llm-service:8006
+      - PERSONA_AGENT_URL=http://persona-agent:8009
     networks:
       - voice-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import websockets; print('ok')\""]
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8767),timeout=3); s.close()"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
 networks:
   # 外部共享网络：由 start-all.sh 创建

@@ -24,6 +24,8 @@ services:
     build: .
     container_name: voiceprint-api
     restart: unless-stopped
+    labels:
+      - "autoheal=true"
     ports:
       - "8005:8005"
     volumes:
@@ -35,10 +37,10 @@ services:
     networks:
       - voice-pipeline
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8005/voiceprint/docs > /dev/null || curl -sf http://localhost:8005/ > /dev/null"]
+      test: ["CMD-SHELL", "curl -sf 'http://localhost:8005/voiceprint/health?key=de395e06-035c-44f9-9a6b-8ef126a8bea0' | grep -q healthy"]
       interval: 20s
       timeout: 10s
-      retries: 10
+      retries: 5
       start_period: 180s
 
 volumes:
