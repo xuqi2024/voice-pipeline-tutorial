@@ -6,7 +6,7 @@ model:
 voiceprint:
   # 说话人匹配的最低相似度阈值 (0~1)
   # 0.55 在实际环境中误识率较低；多样本注册后可适当调高至 0.60
-  similarity_threshold: 0.40
+  similarity_threshold: 0.55
 
 mysql:
   database: voiceprint_db

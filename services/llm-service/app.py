@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Service — 语音对话智能体
-接收 ASR 识别结果 + 说话人信息，调用 MiniMax M2.7 生成回复，
+接收 ASR 识别结果 + 说话人信息，调用 MiniMax M3 生成回复，
 并将结果推送到 Dashboard 实时展示。
 """
 
@@ -30,7 +30,7 @@ PORT = int(os.getenv("PORT", "8006"))
 MINIMAX_API_KEY  = os.getenv("MINIMAX_API_KEY", "")
 MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL",
                              "https://api.minimaxi.com/anthropic/v1/messages")
-MINIMAX_MODEL    = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
+MINIMAX_MODEL    = os.getenv("MINIMAX_MODEL", "MiniMax-M3")
 DASHBOARD_URL    = os.getenv("DASHBOARD_URL", "http://dashboard:8080")
 TTS_SERVICE_URL  = os.getenv("TTS_SERVICE_URL", "http://172.18.0.1:8766")
 TTS_VOICE_ID     = os.getenv("TTS_VOICE_ID", "female-shaonv")

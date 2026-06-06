@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 MINIMAX_API_KEY  = os.getenv("MINIMAX_API_KEY", "")
 MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL", "https://api.minimaxi.com/anthropic/v1/messages")
-MINIMAX_MODEL    = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
+MINIMAX_MODEL    = os.getenv("MINIMAX_MODEL", "MiniMax-M3")
 VOICEPRINT_API_URL = os.getenv("VOICEPRINT_API_URL", "http://voiceprint-api:8005")
 VOICEPRINT_API_KEY = os.getenv("VOICEPRINT_API_KEY", "")
 DB_PATH = os.getenv("DB_PATH", "/app/data/persona.db")
@@ -226,7 +226,7 @@ async def call_llm(messages: list, system: str = "") -> Optional[str]:
                 headers={"x-api-key": MINIMAX_API_KEY, "anthropic-version": "2023-06-01"},
                 json=payload)
         if r.status_code == 200:
-            # MiniMax M2.7 返回 thinking + text 两个 content block，取第一个 type=text 的
+            # MiniMax M3 返回的 content block，取第一个 type=text 的
             content_blocks = r.json().get("content", [])
             text_block = next((b for b in content_blocks if b.get("type") == "text"), None)
             if text_block:
